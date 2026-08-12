@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    background-color: #faf9f6;
+    color: #0f172a;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* Custom Soft Shadow Utilities with subtle orange glow */
+.shadow-lilac {
+  box-shadow: 0 10px 30px -5px rgba(236, 112, 0, 0.08), 0 4px 12px -2px rgba(236, 112, 0, 0.04);
+}
+
+.shadow-lilac-hover {
+  box-shadow: 0 16px 36px -4px rgba(236, 112, 0, 0.18), 0 6px 16px -2px rgba(236, 112, 0, 0.1);
+}
+
+

@@ -1,0 +1,6 @@
+{
+  "name": "TennisPlay",
+  "description": "Plataforma SaaS para gestão e organização de grupos de tênis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

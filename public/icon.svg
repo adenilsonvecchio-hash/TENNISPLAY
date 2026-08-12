@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Soft Drop Shadow for Icon Container -->
+    <filter id="pwaShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#0f766e" flood-opacity="0.12"/>
+    </filter>
+
+    <!-- Radial Lime Tennis Ball Gradient -->
+    <radialGradient id="tennisBallGrad" cx="35%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#eeff41" />
+      <stop offset="65%" stop-color="#c6ff00" />
+      <stop offset="100%" stop-color="#99e600" />
+    </radialGradient>
+
+    <!-- Dark Teal Ring Gradient -->
+    <linearGradient id="tealRingGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f766e"/>
+      <stop offset="100%" stop-color="#047857"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Outer White Squircle Container with Soft Mint Border -->
+  <rect x="24" y="24" width="464" height="464" rx="120" ry="120" fill="#ffffff" stroke="#a7f3d0" stroke-width="8" filter="url(#pwaShadow)"/>
+
+  <!-- Outer Teal Ring Base -->
+  <circle cx="256" cy="256" r="172" fill="#ffffff" stroke="url(#tealRingGrad)" stroke-width="20"/>
+
+  <!-- Inner Dark Teal Circle Frame -->
+  <circle cx="256" cy="256" r="132" fill="#f0fdf4" stroke="#0f766e" stroke-width="4"/>
+
+  <!-- Bright Lime Tennis Ball -->
+  <circle cx="256" cy="256" r="124" fill="url(#tennisBallGrad)" stroke="#15803d" stroke-width="4"/>
+
+  <!-- Tennis Ball White Seam Line 1 (Upper Curve) -->
+  <path d="M 160 210 Q 256 150 352 210" fill="none" stroke="#ffffff" stroke-width="14" stroke-linecap="round"/>
+
+  <!-- Tennis Ball White Seam Line 2 (Lower Curve) -->
+  <path d="M 160 302 Q 256 362 352 302" fill="none" stroke="#ffffff" stroke-width="14" stroke-linecap="round"/>
+</svg>
