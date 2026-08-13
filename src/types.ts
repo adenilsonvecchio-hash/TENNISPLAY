@@ -43,7 +43,6 @@ export interface Grupo {
   cidade: string;
   estado: string;
   logo_url?: string | null;
-  imagem_url?: string | null;
   imagem_path?: string | null;
   ativo: boolean;
   created_at: string;

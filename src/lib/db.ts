@@ -88,14 +88,12 @@ const mapUser = (row: any): Usuario => ({
 
 const mapGroup = (row: any): Grupo => {
   const { cidade, estado } = normalizeLocation(row.descricao, '');
-  const resolvedImage = row.imagem_url || row.logo_url || null;
   return {
     id: row.id,
     nome: row.nome,
     cidade,
     estado,
-    logo_url: resolvedImage,
-    imagem_url: resolvedImage,
+    logo_url: row.logo_url || null,
     imagem_path: row.imagem_path || null,
     ativo: row.ativo,
     created_at: row.criado_em,
@@ -465,7 +463,6 @@ export const DbService = {
     const payload: Record<string, unknown> = {};
     if (values.nome !== undefined) payload.nome = values.nome;
     if (values.logo_url !== undefined) payload.logo_url = values.logo_url;
-    if (values.imagem_url !== undefined) payload.imagem_url = values.imagem_url;
     if (values.imagem_path !== undefined) payload.imagem_path = values.imagem_path;
     if (values.ativo !== undefined) payload.ativo = values.ativo;
     if (values.cidade !== undefined || values.estado !== undefined) {

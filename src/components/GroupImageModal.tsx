@@ -1,12 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Grupo } from '../types';
 import { toast } from '../lib/toast';
-import { DbService } from '../lib/db';
+import { getSupabaseClient } from '../lib/supabase';
 import {
   validateGroupImageFile,
   processAndCropImage,
-  uploadGroupImageToStorage,
-  removeGroupImageFromStorage
+  getGroupPublicImageUrl
 } from '../lib/groupImage';
 import { X, Upload, Trash2, ZoomIn, Image as ImageIcon, Loader2, RefreshCw } from 'lucide-react';
 
@@ -26,7 +25,9 @@ export function GroupImageModal({
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [previewSrc, setPreviewSrc] = useState<string | null>(group.logo_url || group.imagem_url || null);
+  const [previewSrc, setPreviewSrc] = useState<string | null>(
+    getGroupPublicImageUrl(group.imagem_path) || group.logo_url || null
+  );
   const [scale, setScale] = useState<number>(1);
   const [offsetX, setOffsetX] = useState<number>(0);
   const [offsetY, setOffsetY] = useState<number>(0);
@@ -36,14 +37,14 @@ export function GroupImageModal({
   useEffect(() => {
     if (isOpen) {
       setSelectedFile(null);
-      setPreviewSrc(group.logo_url || group.imagem_url || null);
+      setPreviewSrc(getGroupPublicImageUrl(group.imagem_path) || group.logo_url || null);
       setScale(1);
       setOffsetX(0);
       setOffsetY(0);
       setIsSaving(false);
       setIsRemoving(false);
     }
-  }, [isOpen, group.logo_url, group.imagem_url]);
+  }, [isOpen, group.imagem_path, group.logo_url]);
 
   if (!isOpen) return null;
 
@@ -73,6 +74,15 @@ export function GroupImageModal({
     }
 
     setIsSaving(true);
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      toast.error('Não foi possível conectar ao Supabase.');
+      setIsSaving(false);
+      return;
+    }
+
+    const imagePath = `${group.id}/avatar.webp`;
+
     try {
       const source = selectedFile || previewSrc!;
       const processedBlob = await processAndCropImage(source, {
@@ -83,14 +93,50 @@ export function GroupImageModal({
         offsetY
       });
 
-      const { publicUrl, filePath } = await uploadGroupImageToStorage(group.id, processedBlob);
+      // 1. Upload image to bucket
+      const { error: uploadError } = await supabase.storage
+        .from('group-avatars')
+        .upload(imagePath, processedBlob, {
+          contentType: 'image/webp',
+          upsert: true,
+          cacheControl: '3600'
+        });
 
-      await DbService.updateGroupInfo(group.id, {
-        logo_url: publicUrl,
-        imagem_url: publicUrl,
-        imagem_path: filePath
-      });
+      if (uploadError) {
+        console.error('[Supabase Storage Upload Error]:', uploadError);
+        throw uploadError;
+      }
 
+      // 2. Update public.grupos.imagem_path
+      const { data, error: dbError } = await supabase
+        .from('grupos')
+        .update({ imagem_path: imagePath })
+        .eq('id', group.id)
+        .select('id, imagem_path')
+        .single();
+
+      if (dbError) {
+        console.error('Erro ao atualizar imagem_path:', {
+          message: dbError.message,
+          code: dbError.code,
+          details: dbError.details,
+          hint: dbError.hint
+        });
+
+        // Cleanup uploaded file on DB error
+        try {
+          await supabase.storage.from('group-avatars').remove([imagePath]);
+        } catch (cleanErr) {
+          console.warn('Erro ao remover arquivo do storage após falha no banco:', cleanErr);
+        }
+        throw dbError;
+      }
+
+      if (!data || data.imagem_path !== imagePath) {
+        throw new Error('Confirmação do banco para imagem_path falhou.');
+      }
+
+      // 3. Refresh session and toast success
       await onRefreshSession();
       toast.success('Imagem do grupo atualizada com sucesso.');
       onClose();
@@ -106,14 +152,38 @@ export function GroupImageModal({
     if (!confirm('Tem certeza que deseja remover a imagem personalizada do grupo?')) return;
 
     setIsRemoving(true);
-    try {
-      await removeGroupImageFromStorage(group.id);
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      toast.error('Não foi possível conectar ao Supabase.');
+      setIsRemoving(false);
+      return;
+    }
 
-      await DbService.updateGroupInfo(group.id, {
-        logo_url: null,
-        imagem_url: null,
-        imagem_path: null
-      });
+    const imagePath = `${group.id}/avatar.webp`;
+
+    try {
+      try {
+        await supabase.storage.from('group-avatars').remove([imagePath]);
+      } catch (storageErr) {
+        console.warn('[Supabase Storage Remove Warning]:', storageErr);
+      }
+
+      const { data, error: dbError } = await supabase
+        .from('grupos')
+        .update({ imagem_path: null })
+        .eq('id', group.id)
+        .select('id, imagem_path')
+        .single();
+
+      if (dbError) {
+        console.error('Erro ao atualizar imagem_path:', {
+          message: dbError.message,
+          code: dbError.code,
+          details: dbError.details,
+          hint: dbError.hint
+        });
+        throw dbError;
+      }
 
       await onRefreshSession();
       toast.success('Imagem do grupo atualizada com sucesso.');
@@ -126,7 +196,7 @@ export function GroupImageModal({
     }
   };
 
-  const hasCustomImage = Boolean(group.logo_url || group.imagem_url || selectedFile);
+  const hasCustomImage = Boolean(group.imagem_path || group.logo_url || selectedFile);
 
   return (
     <div className="fixed inset-0 z-[9990] flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in duration-200">

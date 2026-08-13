@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Grupo } from '../types';
 import { Camera } from 'lucide-react';
+import { getGroupPublicImageUrl } from '../lib/groupImage';
 
 interface GroupAvatarProps {
   group: Grupo | null | undefined;
@@ -45,7 +46,7 @@ export function GroupAvatar({
     xl: 'w-5 h-5'
   }[size];
 
-  const imageUrl = group?.logo_url || group?.imagem_url;
+  const imageUrl = getGroupPublicImageUrl(group?.imagem_path) || group?.logo_url;
 
   return (
     <div className={`relative inline-block shrink-0 ${sizeClasses} ${className}`}>

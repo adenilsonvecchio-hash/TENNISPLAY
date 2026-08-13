@@ -115,10 +115,23 @@ export async function processAndCropImage(
   });
 }
 
+export function getGroupPublicImageUrl(imagemPath?: string | null): string | null {
+  if (!imagemPath) return null;
+  const supabase = getSupabaseClient();
+  if (!supabase) return null;
+
+  const { data } = supabase.storage
+    .from('group-avatars')
+    .getPublicUrl(imagemPath);
+
+  if (!data?.publicUrl) return null;
+  return `${data.publicUrl}?v=${Date.now()}`;
+}
+
 export async function uploadGroupImageToStorage(
   groupId: string,
   imageBlob: Blob
-): Promise<{ publicUrl: string; filePath: string }> {
+): Promise<{ filePath: string }> {
   const supabase = getSupabaseClient();
   if (!supabase) {
     throw new Error('Cliente Supabase não inicializado');
@@ -139,14 +152,7 @@ export async function uploadGroupImageToStorage(
     throw uploadError;
   }
 
-  const { data: publicUrlData } = supabase.storage
-    .from('group-avatars')
-    .getPublicUrl(filePath);
-
-  const timestamp = Date.now();
-  const publicUrl = `${publicUrlData.publicUrl}?v=${timestamp}`;
-
-  return { publicUrl, filePath };
+  return { filePath };
 }
 
 export async function removeGroupImageFromStorage(groupId: string): Promise<void> {
