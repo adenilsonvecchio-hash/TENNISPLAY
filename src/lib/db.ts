@@ -57,19 +57,28 @@ const classFromDb = (value?: string | null): PlayerClass => {
   return 'Sem Classe';
 };
 
-const classToDb = (value?: PlayerClass | null) => {
-  if (!value || value === 'Sem Classe') return null;
-  if (value.includes('A (1º)')) return 'A';
-  if (value.includes('B (2º)')) return 'B';
-  if (value.includes('C (3º)')) return 'C';
-  if (value.includes('D (4º)')) return 'D';
-  if (value.includes('E (5º)')) return 'E';
-  if (value.includes('F (6º)')) return 'F';
-  if (value.includes('G (7º)')) return 'G';
-  if (value.includes('Infantil')) return 'INFANTIL';
-  if (value.includes('Juvenil')) return 'JUVENIL';
-  if (value.includes('50+')) return '50+';
-  return value;
+const classToDb = (value?: PlayerClass | string | null): string | null => {
+  if (!value || value === 'Sem Classe' || value === 'null' || value === 'undefined') return null;
+  const str = String(value).trim();
+  if (!str || str === 'Sem Classe') return null;
+
+  if (str === 'A' || str.includes('A (1º)') || str === 'Classe A') return 'A';
+  if (str === 'B' || str.includes('B (2º)') || str === 'Classe B') return 'B';
+  if (str === 'C' || str.includes('C (3º)') || str === 'Classe C') return 'C';
+  if (str === 'D' || str.includes('D (4º)') || str === 'Classe D') return 'D';
+  if (str === 'E' || str.includes('E (5º)') || str === 'Classe E') return 'E';
+  if (str === 'F' || str.includes('F (6º)') || str === 'Classe F') return 'F';
+  if (str === 'G' || str.includes('G (7º)') || str === 'Classe G') return 'G';
+  if (str === 'INFANTIL' || str.toLowerCase().includes('infantil')) return 'INFANTIL';
+  if (str === 'JUVENIL' || str.toLowerCase().includes('juvenil')) return 'JUVENIL';
+  if (str === '50+' || str.includes('50+')) return '50+';
+
+  const upper = str.toUpperCase();
+  if (['A', 'B', 'C', 'D', 'E', 'F', 'G', 'INFANTIL', 'JUVENIL', '50+'].includes(upper)) {
+    return upper;
+  }
+
+  return null;
 };
 
 const mapUser = (row: any): Usuario => ({
