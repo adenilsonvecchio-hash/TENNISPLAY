@@ -88,10 +88,20 @@ const mapUser = (row: any): Usuario => ({
 
 const mapGroup = (row: any): Grupo => {
   const { cidade, estado } = normalizeLocation(row.descricao, '');
+  const resolvedImage = row.imagem_url || row.logo_url || null;
   return {
-    id: row.id, nome: row.nome, cidade, estado, logo_url: row.logo_url,
-    ativo: row.ativo, created_at: row.criado_em, codigo_convite: row.codigo,
-    default_qtd_quadras: row.default_qtd_quadras || 4, prazo_cancelamento_horas: row.prazo_cancelamento_horas || 2
+    id: row.id,
+    nome: row.nome,
+    cidade,
+    estado,
+    logo_url: resolvedImage,
+    imagem_url: resolvedImage,
+    imagem_path: row.imagem_path || null,
+    ativo: row.ativo,
+    created_at: row.criado_em,
+    codigo_convite: row.codigo,
+    default_qtd_quadras: row.default_qtd_quadras || 4,
+    prazo_cancelamento_horas: row.prazo_cancelamento_horas || 2
   };
 };
 
@@ -455,6 +465,8 @@ export const DbService = {
     const payload: Record<string, unknown> = {};
     if (values.nome !== undefined) payload.nome = values.nome;
     if (values.logo_url !== undefined) payload.logo_url = values.logo_url;
+    if (values.imagem_url !== undefined) payload.imagem_url = values.imagem_url;
+    if (values.imagem_path !== undefined) payload.imagem_path = values.imagem_path;
     if (values.ativo !== undefined) payload.ativo = values.ativo;
     if (values.cidade !== undefined || values.estado !== undefined) {
       const norm = normalizeLocation(values.cidade, values.estado);

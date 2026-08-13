@@ -5,6 +5,7 @@ import { toast } from '../lib/toast';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { formatLocation } from '../lib/location';
 import { AppLogo } from './AppLogo';
+import { GroupAvatar } from './GroupAvatar';
 import { NotificationCenter } from './NotificationCenter';
 import {
   LogOut,
@@ -113,7 +114,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   onClick={() => setShowGroupMenu(!showGroupMenu)}
                   className="flex items-center gap-2 px-3.5 h-10 rounded-2xl bg-slate-100 hover:bg-slate-200/80 text-slate-900 text-xs font-bold border border-slate-200 transition-colors shrink-0 cursor-pointer"
                 >
-                  <Building2 className="w-4 h-4 text-slate-700 shrink-0" />
+                  <GroupAvatar group={session.activeGroup} size="xs" isOwner={false} shape="rounded-full" />
                   <span className="max-w-[120px] lg:max-w-[160px] truncate font-bold">
                     {session.activeGroup.nome}
                   </span>
@@ -142,15 +143,18 @@ export const Navbar: React.FC<NavbarProps> = ({
                           <button
                             key={group.id}
                             onClick={() => handleSwitchGroup(group.id)}
-                            className={`w-full text-left px-4 py-2.5 flex items-center justify-between hover:bg-slate-50 transition-colors cursor-pointer ${
+                            className={`w-full text-left px-4 py-2 flex items-center justify-between hover:bg-slate-50 transition-colors cursor-pointer ${
                               isCurrent ? 'bg-slate-100 font-bold text-slate-950' : 'text-slate-700'
                             }`}
                           >
-                            <div className="truncate pr-2">
-                              <p className="text-sm truncate font-semibold">{group.nome}</p>
-                              <p className="text-xs text-slate-500">
-                                {formatLocation(group.cidade, group.estado)} • {member.perfil}
-                              </p>
+                            <div className="flex items-center gap-2.5 truncate pr-2">
+                              <GroupAvatar group={group} size="xs" isOwner={false} />
+                              <div className="truncate">
+                                <p className="text-sm truncate font-semibold">{group.nome}</p>
+                                <p className="text-xs text-slate-500">
+                                  {formatLocation(group.cidade, group.estado)} • {member.perfil}
+                                </p>
+                              </div>
                             </div>
                             {isCurrent && <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />}
                           </button>

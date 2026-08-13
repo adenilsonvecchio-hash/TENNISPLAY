@@ -3,6 +3,8 @@ import { AuthSession, MembroGrupo, PlayerClass, DEFAULT_PLAYER_CLASSES, MemberSt
 import { DbService } from '../lib/db';
 import { toast, formatClassUpdateToastMessage } from '../lib/toast';
 import { formatLocation } from '../lib/location';
+import { GroupAvatar } from './GroupAvatar';
+import { GroupImageModal } from './GroupImageModal';
 import {
   LayoutDashboard,
   Users,
@@ -37,6 +39,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ session, onRefreshSessio
   const [adminTab, setAdminTab] = useState<
     'dashboard' | 'membros' | 'solicitacoes' | 'reservas' | 'classes' | 'relatorios' | 'config'
   >(initialTab || 'dashboard');
+  const [isImageModalOpen, setIsImageModalOpen] = useState(false);
+
+  const currentMember = session.membros.find(m => m.usuario_id === user?.id && m.grupo_id === activeGroup?.id);
+  const isOwner = currentMember?.perfil === 'PROPRIETARIO' && currentMember?.status === 'ATIVO';
 
   useEffect(() => {
     if (initialTab) {
@@ -813,14 +819,48 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ session, onRefreshSessio
 
       {/* 7. CONFIGURAÇÕES TAB */}
       {adminTab === 'config' && (
-        <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs space-y-4 animate-in fade-in duration-150">
+        <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs space-y-6 animate-in fade-in duration-150">
           <h3 className="font-black text-slate-900 text-lg">Configurações do Grupo</h3>
+          
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-5 p-4 rounded-2xl bg-slate-50 border border-slate-100">
+            <GroupAvatar
+              group={activeGroup}
+              isOwner={isOwner}
+              onClickEdit={() => setIsImageModalOpen(true)}
+              size="xl"
+            />
+            <div className="space-y-1">
+              <h4 className="font-black text-slate-900 text-base">{activeGroup.nome}</h4>
+              <p className="text-xs text-slate-500 font-medium">
+                {isOwner ? 'Você pode alterar a imagem oficial do grupo.' : 'Imagem oficial do grupo de tênis.'}
+              </p>
+              {isOwner && (
+                <button
+                  type="button"
+                  onClick={() => setIsImageModalOpen(true)}
+                  className="mt-2 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5"
+                >
+                  Alterar imagem do grupo
+                </button>
+              )}
+            </div>
+          </div>
+
           <div className="space-y-2 text-xs text-slate-700">
             <p><strong>Nome do Grupo:</strong> {activeGroup.nome}</p>
             <p><strong>Cidade/Estado:</strong> {formatLocation(activeGroup.cidade, activeGroup.estado)}</p>
             <p><strong>Código de Convite:</strong> <span className="font-mono bg-slate-100 px-2 py-0.5 rounded border">{activeGroup.codigo_convite}</span></p>
           </div>
         </div>
+      )}
+
+      {activeGroup && (
+        <GroupImageModal
+          group={activeGroup}
+          isOpen={isImageModalOpen}
+          onClose={() => setIsImageModalOpen(false)}
+          onRefreshSession={onRefreshSession}
+        />
       )}
 
     </div>

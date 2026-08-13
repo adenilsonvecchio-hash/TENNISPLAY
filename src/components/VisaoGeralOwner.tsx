@@ -3,6 +3,8 @@ import { AuthSession, MembroGrupo, Reserva, CourtConfig, PlayerClass } from '../
 import { DbService } from '../lib/db';
 import { toast, formatClassUpdateToastMessage } from '../lib/toast';
 import { formatLocation } from '../lib/location';
+import { GroupAvatar } from './GroupAvatar';
+import { GroupImageModal } from './GroupImageModal';
 import {
   CalendarDays,
   UserPlus,
@@ -43,6 +45,9 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
 
   const [members, setMembers] = useState<MembroGrupo[]>([]);
   const [ownerClassState, setOwnerClassState] = useState<PlayerClass>(currentMember?.classe || 'Sem Classe');
+  const [isImageModalOpen, setIsImageModalOpen] = useState(false);
+
+  const isOwner = currentMember?.perfil === 'PROPRIETARIO' && currentMember?.status === 'ATIVO';
 
   useEffect(() => {
     if (currentMember?.classe) {
@@ -153,17 +158,12 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
           
           {/* Group Logo & Info */}
           <div className="flex items-center gap-4">
-            {activeGroup.logo_url ? (
-              <img
-                src={activeGroup.logo_url}
-                alt={activeGroup.nome}
-                className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl object-cover border border-slate-200 shrink-0 shadow-2xs"
-              />
-            ) : (
-              <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-[#0F172A] text-slate-200 flex items-center justify-center font-black text-2xl shrink-0 shadow-2xs">
-                🎾
-              </div>
-            )}
+            <GroupAvatar
+              group={activeGroup}
+              isOwner={isOwner}
+              onClickEdit={() => setIsImageModalOpen(true)}
+              size="lg"
+            />
 
             <div>
               <div className="flex items-center gap-2 flex-wrap">
@@ -522,6 +522,13 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
           </div>
         </div>
       </div>
+
+      <GroupImageModal
+        group={activeGroup}
+        isOpen={isImageModalOpen}
+        onClose={() => setIsImageModalOpen(false)}
+        onRefreshSession={onRefreshSession || (() => {})}
+      />
 
     </div>
   );

@@ -4,6 +4,7 @@ import { DbService } from '../lib/db';
 import { toast } from '../lib/toast';
 import { formatLocation } from '../lib/location';
 import { AppLogo } from './AppLogo';
+import { GroupAvatar } from './GroupAvatar';
 import { NotificationCenter } from './NotificationCenter';
 import {
   Home,
@@ -131,9 +132,9 @@ export const AppShell: React.FC<AppShellProps> = ({
             <button
               onClick={() => setShowGroupModal(true)}
               aria-label="Trocar grupo de tênis"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 text-white border border-slate-700/80 transition-all max-w-[180px] sm:max-w-[280px] md:max-w-[360px] cursor-pointer"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 text-white border border-slate-700/80 transition-all max-w-[180px] sm:max-w-[280px] md:max-w-[360px] cursor-pointer"
             >
-              <Building2 className="w-3.5 h-3.5 text-slate-300 shrink-0" />
+              <GroupAvatar group={activeGroup} size="xs" isOwner={false} shape="rounded-full" />
               <span className="text-xs sm:text-sm font-extrabold truncate tracking-tight text-white">
                 {activeGroup.nome}
               </span>
@@ -347,17 +348,20 @@ export const AppShell: React.FC<AppShellProps> = ({
                   <button
                     key={group.id}
                     onClick={() => handleSwitchGroup(group.id)}
-                    className={`w-full text-left p-3.5 rounded-2xl flex items-center justify-between border transition-all cursor-pointer ${
+                    className={`w-full text-left p-3 rounded-2xl flex items-center justify-between border transition-all cursor-pointer ${
                       isCurrent
                         ? 'bg-[#0B1633] text-white border-[#0B1633] shadow-md'
                         : 'bg-slate-50 hover:bg-slate-100 text-slate-800 border-slate-200'
                     }`}
                   >
-                    <div>
-                      <p className="text-sm font-black truncate">{group.nome}</p>
-                      <p className={`text-xs ${isCurrent ? 'text-slate-300' : 'text-slate-500'}`}>
-                        {formatLocation(group.cidade, group.estado)} • {member.perfil}
-                      </p>
+                    <div className="flex items-center gap-3 truncate pr-2">
+                      <GroupAvatar group={group} size="sm" isOwner={false} />
+                      <div className="truncate">
+                        <p className="text-sm font-black truncate">{group.nome}</p>
+                        <p className={`text-xs ${isCurrent ? 'text-slate-300' : 'text-slate-500'}`}>
+                          {formatLocation(group.cidade, group.estado)} • {member.perfil}
+                        </p>
+                      </div>
                     </div>
                     {isCurrent && <CheckCircle2 className="w-5 h-5 text-slate-300 shrink-0" />}
                   </button>
