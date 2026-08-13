@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AuthSession, Grupo } from '../types';
 import { DbService } from '../lib/db';
+import { toast } from '../lib/toast';
 import { formatLocation } from '../lib/location';
 import { AppLogo } from './AppLogo';
 import { NotificationCenter } from './NotificationCenter';
@@ -76,8 +77,9 @@ export const AppShell: React.FC<AppShellProps> = ({
       const newSession = await DbService.switchGroup(user.id, groupId);
       onUpdateSession(newSession);
       setShowGroupModal(false);
+      toast.success('Grupo alterado com sucesso!');
     } catch (err: any) {
-      alert(err.message || 'Erro ao trocar de grupo.');
+      toast.error(err.message || 'Erro ao trocar de grupo.');
     }
   };
 

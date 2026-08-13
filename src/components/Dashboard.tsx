@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AuthSession, MembroGrupo, MemberStatus, PerfilRole, PlayerClass, ESTADOS_BRASIL, Grupo, Usuario } from '../types';
 import { DbService } from '../lib/db';
+import { toast } from '../lib/toast';
 import { formatLocation } from '../lib/location';
 import { getSupabaseClient } from '../lib/supabase';
 import { AgendaReservas } from './AgendaReservas';
@@ -176,8 +177,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
     try {
       const updated = await DbService.cancelMembershipRequest(currentMember.id, user.id);
       onUpdateSession(updated);
+      toast.success('Solicitação cancelada com sucesso.');
     } catch (err: any) {
-      alert(err.message || 'Erro ao cancelar solicitação.');
+      toast.error(err.message || 'Erro ao cancelar solicitação.');
     } finally {
       setIsCanceling(false);
     }

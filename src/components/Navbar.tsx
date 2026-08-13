@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AuthSession, Grupo } from '../types';
 import { DbService } from '../lib/db';
+import { toast } from '../lib/toast';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { formatLocation } from '../lib/location';
 import { AppLogo } from './AppLogo';
@@ -66,8 +67,9 @@ export const Navbar: React.FC<NavbarProps> = ({
       const newSession = await DbService.switchGroup(session.user.id, groupId);
       onUpdateSession(newSession);
       setShowGroupMenu(false);
+      toast.success('Grupo alterado com sucesso!');
     } catch (err: any) {
-      alert(err.message || 'Erro ao trocar de grupo.');
+      toast.error(err.message || 'Erro ao trocar de grupo.');
     }
   };
 

@@ -1,4 +1,5 @@
 import React from 'react';
+import { toast } from '../lib/toast';
 import {
   ShieldCheck,
   UserRound,
@@ -54,7 +55,7 @@ export const HomeLanding: React.FC<HomeLandingProps> = ({
           if (isAdmin) {
             onNavigateTab?.('admin_panel');
           } else {
-            alert('Acesso restrito a Administradores e Proprietários de grupos.');
+            toast.error('Acesso restrito a Administradores e Proprietários de grupos.');
           }
         } else {
           onSelectAction('ADMIN_LOGIN');

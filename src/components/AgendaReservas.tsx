@@ -8,6 +8,7 @@ import {
   PlayerClass
 } from '../types';
 import { DbService } from '../lib/db';
+import { toast } from '../lib/toast';
 import { getSupabaseClient } from '../lib/supabase';
 import {
   Calendar as CalendarIcon,
@@ -140,7 +141,7 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
   const handleSaveCourtConfig = async (e: React.FormEvent) => {
     e.preventDefault();
     if (numQuadrasInput < 1 || numQuadrasInput > 12) {
-      alert('Informe um número de quadras entre 1 e 12.');
+      toast.error('Informe um número de quadras entre 1 e 12.');
       return;
     }
 
@@ -154,6 +155,7 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
       );
       setCourtConfig(updated);
       setShowAdminConfig(false);
+      toast.success(`Configuração atualizada! Teremos ${updated.qtd_quadras} quadra(s) para esta data.`);
       setFeedback({
         type: 'success',
         message: `Configuração atualizada! Teremos ${updated.qtd_quadras} quadra(s) para esta data.`
@@ -161,7 +163,7 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
       setTimeout(() => setFeedback(null), 4000);
       await refreshData();
     } catch (err: any) {
-      alert(err.message || 'Erro ao salvar configuração.');
+      toast.error(err.message || 'Erro ao salvar configuração.');
     }
   };
 

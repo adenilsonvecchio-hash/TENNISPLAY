@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { toast } from '../lib/toast';
 import { MANUAL_DATA, generateUserManualPdf } from '../lib/pdfGenerator';
 import {
   FileText,
@@ -54,9 +55,10 @@ export const UserManualModal: React.FC<UserManualModalProps> = ({ isOpen, onClos
     setTimeout(() => {
       try {
         generateUserManualPdf();
+        toast.success('Manual baixado com sucesso!');
       } catch (err) {
         console.error('Erro ao gerar PDF:', err);
-        alert('Erro ao gerar o arquivo PDF. Tente novamente.');
+        toast.error('Erro ao gerar o arquivo PDF. Tente novamente.');
       } finally {
         setIsGenerating(false);
       }

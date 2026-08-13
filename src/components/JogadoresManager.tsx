@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AuthSession, MembroGrupo, MemberStatus, PerfilRole, PlayerClass, Reserva } from '../types';
 import { DbService } from '../lib/db';
+import { toast, formatClassUpdateToastMessage } from '../lib/toast';
 import {
   Users,
   Search,
@@ -78,27 +79,35 @@ export const JogadoresManager: React.FC<JogadoresManagerProps> = ({ session, onR
       const updated = await DbService.approveMemberWithClass(memberId, playerClass);
       setMembers(updated);
       onRefreshSession();
+      toast.success('Solicitação de entrada aprovada com sucesso!');
     } catch (err: any) {
-      alert(err.message || 'Erro ao aprovar jogador.');
+      toast.error(err.message || 'Erro ao aprovar jogador.');
     }
   };
 
   const handleUpdateClass = async (memberId: string, playerClass: PlayerClass) => {
+    const targetMember = members.find((m) => m.id === memberId);
+    const previousClass = targetMember?.classe;
+    const isSelf = targetMember?.usuario_id === user?.id;
+    const memberName = targetMember?.usuario?.nome || 'jogador';
+
+    // Optimistic UI update
     setMembers((prev) =>
       prev.map((m) => (m.id === memberId ? { ...m, classe: playerClass } : m))
     );
+
     try {
       const updated = await DbService.updateMemberClass(memberId, playerClass);
       setMembers(updated);
       if (onRefreshSession) {
         await onRefreshSession();
       }
-      const currentMem = session.membros.find(m => m.usuario_id === user?.id && m.grupo_id === activeGroup?.id);
-      if (currentMem && memberId === currentMem.id) {
-        alert('Sua classe foi atualizada com sucesso');
-      }
+      toast.success(formatClassUpdateToastMessage(isSelf, memberName, playerClass));
     } catch (err: any) {
-      alert(err.message || 'Erro ao alterar classe.');
+      setMembers((prev) =>
+        prev.map((m) => (m.id === memberId ? { ...m, classe: previousClass } : m))
+      );
+      toast.error('Não foi possível atualizar a classe. Tente novamente.');
       loadMembers();
     }
   };
@@ -123,8 +132,9 @@ export const JogadoresManager: React.FC<JogadoresManagerProps> = ({ session, onR
       }
       onRefreshSession();
       setActionConfirm(null);
+      toast.success('Ação realizada com sucesso!');
     } catch (err: any) {
-      alert(err.message || 'Erro ao realizar ação.');
+      toast.error(err.message || 'Erro ao realizar ação.');
     }
   };
 
@@ -428,8 +438,9 @@ export const JogadoresManager: React.FC<JogadoresManagerProps> = ({ session, onR
                               const updated = await DbService.updateMemberPerfil(m.id, newRole);
                               setMembers(updated);
                               if (onRefreshSession) await onRefreshSession();
+                              toast.success('Papel atualizado com sucesso!');
                             } catch (err: any) {
-                              alert(err.message || 'Erro ao atualizar papel.');
+                              toast.error(err.message || 'Erro ao atualizar papel.');
                               loadMembers();
                             }
                           }}

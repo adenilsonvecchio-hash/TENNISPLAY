@@ -9,6 +9,7 @@ import { AppShell } from './components/AppShell';
 import { Dashboard } from './components/Dashboard';
 import { SupabaseConfigModal } from './components/SupabaseConfigModal';
 import { UserManualModal } from './components/UserManualModal';
+import { ToastContainer } from './components/ToastContainer';
 
 export default function App() {
   const [session, setSession] = useState<AuthSession | null>(null);
@@ -113,6 +114,8 @@ export default function App() {
         onClose={() => setShowManualModal(false)}
       />
 
+      {/* Global Toast Notifications */}
+      <ToastContainer />
     </div>
   );
 }

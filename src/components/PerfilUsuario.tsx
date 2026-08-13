@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AuthSession, PlayerClass, PerfilRole, MemberStatus, Reserva } from '../types';
 import { DbService } from '../lib/db';
+import { toast, formatClassUpdateToastMessage } from '../lib/toast';
 import { formatLocation } from '../lib/location';
 import {
   User,
@@ -70,6 +71,7 @@ export const PerfilUsuario: React.FC<PerfilUsuarioProps> = ({ session, onRefresh
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
+    const classChanged = currentMember && currentMember.perfil === 'PROPRIETARIO' && currentMember.classe !== classeInput;
     try {
       await DbService.updateUserProfile(user.id, {
         nome: nomeInput,
@@ -89,9 +91,21 @@ export const PerfilUsuario: React.FC<PerfilUsuarioProps> = ({ session, onRefresh
       }
       setIsEditingProfile(false);
       onRefreshSession();
-      setFeedback({ type: 'success', message: 'Sua classe foi atualizada com sucesso' });
+
+      const msg = classChanged
+        ? formatClassUpdateToastMessage(true, user.nome, classeInput)
+        : 'Perfil e dados atualizados com sucesso!';
+
+      toast.success(msg);
+      setFeedback({ type: 'success', message: msg });
       setTimeout(() => setFeedback(null), 3500);
     } catch (err: any) {
+      if (classChanged) {
+        setClasseInput(currentMember?.classe || 'Sem Classe');
+        toast.error('Não foi possível atualizar a classe. Tente novamente.');
+      } else {
+        toast.error(err.message || 'Erro ao atualizar perfil.');
+      }
       setFeedback({ type: 'error', message: err.message || 'Erro ao atualizar perfil.' });
     }
   };

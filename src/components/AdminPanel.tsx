@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AuthSession, MembroGrupo, PlayerClass, DEFAULT_PLAYER_CLASSES, MemberStatus, Grupo, Usuario, Reserva, CourtConfig } from '../types';
 import { DbService } from '../lib/db';
+import { toast, formatClassUpdateToastMessage } from '../lib/toast';
 import { formatLocation } from '../lib/location';
 import {
   LayoutDashboard,
@@ -76,7 +77,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ session, onRefreshSessio
   const handleToggleClass = (cls: PlayerClass) => {
     if (enabledClasses.includes(cls)) {
       if (enabledClasses.length <= 1) {
-        alert('O grupo deve manter pelo menos uma classe habilitada.');
+        toast.error('O grupo deve manter pelo menos uma classe habilitada.');
         return;
       }
       setEnabledClasses(enabledClasses.filter((c) => c !== cls));
@@ -90,7 +91,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ session, onRefreshSessio
     if (!trimmed) return;
     const newCls = (trimmed.startsWith('Classe') ? trimmed : `Classe ${trimmed}`) as PlayerClass;
     if (enabledClasses.includes(newCls)) {
-      alert('Esta classe já está na lista.');
+      toast.error('Esta classe já está na lista.');
       return;
     }
     setEnabledClasses([...enabledClasses, newCls]);
@@ -100,6 +101,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ session, onRefreshSessio
   const handleSaveClassesConfig = () => {
     if (!activeGroup) return;
     DbService.saveGroupClasses(activeGroup.id, enabledClasses);
+    toast.success('Configuração de classes salva com sucesso!');
     setSaveClassesSuccessMsg(true);
     setTimeout(() => setSaveClassesSuccessMsg(false), 4000);
   };
@@ -115,9 +117,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ session, onRefreshSessio
         await DbService.updateMemberClass(m.id, targetMassClass);
       }
       await loadAdminData();
-      alert(`Todos os ${unclassedMembers.length} atletas foram atualizados para "${targetMassClass}"!`);
+      toast.success(`Todos os ${unclassedMembers.length} atletas foram atualizados para "${targetMassClass}"!`);
     } catch (err: any) {
-      alert('Erro ao reatribuir atletas em massa.');
+      await loadAdminData();
+      toast.error('Não foi possível atualizar as classes. Tente novamente.');
     }
   };
 
@@ -153,25 +156,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ session, onRefreshSessio
       await DbService.approveMemberWithClass(memberId, classe);
       await loadAdminData();
       onRefreshSession();
-      alert('Jogador aprovado com sucesso!');
+      toast.success('Jogador aprovado com sucesso!');
     } catch (err: any) {
-      alert(err.message || 'Erro ao aprovar jogador.');
+      toast.error(err.message || 'Erro ao aprovar jogador.');
     }
   };
 
   const handleUpdateClass = async (memberId: string, classe: PlayerClass) => {
+    const targetMember = groupMembers.find(m => m.id === memberId);
+    const isSelf = targetMember?.usuario_id === user?.id;
+    const memberName = targetMember?.usuario?.nome || 'jogador';
+
     try {
       await DbService.updateMemberClass(memberId, classe);
       await loadAdminData();
       onRefreshSession();
-      const currentMem = session.membros.find(m => m.usuario_id === user?.id && m.grupo_id === activeGroup?.id);
-      if (currentMem && memberId === currentMem.id) {
-        alert('Sua classe foi atualizada com sucesso');
-      } else {
-        alert('Classe do atleta atualizada com sucesso!');
-      }
+      toast.success(formatClassUpdateToastMessage(isSelf, memberName, classe));
     } catch (err: any) {
-      alert(err.message || 'Erro ao alterar classe.');
+      await loadAdminData();
+      toast.error('Não foi possível atualizar a classe. Tente novamente.');
     }
   };
 
@@ -181,8 +184,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ session, onRefreshSessio
       await DbService.updateMemberStatus(memberId, 'BLOQUEADO');
       await loadAdminData();
       onRefreshSession();
+      toast.success('Jogador bloqueado com sucesso!');
     } catch (err: any) {
-      alert(err.message || 'Erro ao bloquear.');
+      toast.error(err.message || 'Erro ao bloquear.');
     }
   };
 
@@ -191,8 +195,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ session, onRefreshSessio
       await DbService.updateMemberStatus(memberId, 'ATIVO');
       await loadAdminData();
       onRefreshSession();
+      toast.success('Jogador desbloqueado com sucesso!');
     } catch (err: any) {
-      alert(err.message || 'Erro ao desbloquear.');
+      toast.error(err.message || 'Erro ao desbloquear.');
     }
   };
 

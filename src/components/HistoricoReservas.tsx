@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AuthSession, Reserva } from '../types';
 import { DbService } from '../lib/db';
+import { toast } from '../lib/toast';
 import {
   Calendar as CalendarIcon,
   Clock,
@@ -57,10 +58,10 @@ export const HistoricoReservas: React.FC<HistoricoReservasProps> = ({ session, o
     if (!confirm('Deseja realmente cancelar este agendamento?')) return;
     try {
       await DbService.cancelBooking(bookingId, user.id, activeRole || 'JOGADOR');
-      alert('Reserva cancelada com sucesso.');
+      toast.success('Reserva cancelada com sucesso.');
       await refreshList();
     } catch (err: any) {
-      alert(err.message || 'Erro ao cancelar.');
+      toast.error(err.message || 'Erro ao cancelar.');
     }
   };
 

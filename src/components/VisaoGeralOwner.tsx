@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AuthSession, MembroGrupo, Reserva, CourtConfig, PlayerClass } from '../types';
 import { DbService } from '../lib/db';
+import { toast, formatClassUpdateToastMessage } from '../lib/toast';
 import { formatLocation } from '../lib/location';
 import {
   CalendarDays,
@@ -197,14 +198,15 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
                       value={ownerClassState}
                       onChange={async (e) => {
                         const newCls = e.target.value as PlayerClass;
+                        const previousCls = ownerClassState;
                         setOwnerClassState(newCls);
                         try {
                           await DbService.updateMemberClass(currentMember.id, newCls);
                           if (onRefreshSession) await onRefreshSession();
-                          alert('Sua classe foi atualizada com sucesso');
+                          toast.success(formatClassUpdateToastMessage(true, session.user?.nome || '', newCls));
                         } catch (err: any) {
-                          alert(err.message || 'Erro ao atualizar classe.');
-                          setOwnerClassState(currentMember?.classe || 'Sem Classe');
+                          setOwnerClassState(previousCls);
+                          toast.error('Não foi possível atualizar a classe. Tente novamente.');
                         }
                       }}
                       className="bg-transparent text-[11px] font-black text-slate-900 focus:outline-none cursor-pointer"
