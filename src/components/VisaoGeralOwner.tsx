@@ -14,27 +14,31 @@ import {
   Clock,
   Users,
   Percent,
-  AlertCircle,
   ChevronRight,
   ShieldAlert,
-  Sparkles,
   ArrowRight,
   Activity,
   UserCheck,
   Sliders,
-  Tag
+  Tag,
+  CalendarCheck,
+  UserCog,
+  BookOpen,
+  Calendar
 } from 'lucide-react';
 
 interface VisaoGeralOwnerProps {
   session: AuthSession;
   onNavigateTab: (tab: string) => void;
   onRefreshSession?: () => void;
+  onOpenManualPdf?: () => void;
 }
 
 export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
   session,
   onNavigateTab,
   onRefreshSession,
+  onOpenManualPdf,
 }) => {
   const { user, activeGroup } = session;
   const currentMember = session.membros.find((m) => m.usuario_id === user?.id && m.grupo_id === activeGroup?.id);
@@ -46,6 +50,7 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
   const [members, setMembers] = useState<MembroGrupo[]>([]);
   const [ownerClassState, setOwnerClassState] = useState<PlayerClass>(currentMember?.classe || 'Sem Classe');
   const [isImageModalOpen, setIsImageModalOpen] = useState(false);
+  const [nextUserBooking, setNextUserBooking] = useState<Reserva | null>(null);
 
   const isOwner = currentMember?.perfil === 'PROPRIETARIO' && currentMember?.status === 'ATIVO';
 
@@ -54,6 +59,7 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
       setOwnerClassState(currentMember.classe);
     }
   }, [currentMember?.classe]);
+
   const [todayBookings, setTodayBookings] = useState<Reserva[]>([]);
   const [courtConfig, setCourtConfig] = useState<CourtConfig | null>(null);
   const [copied, setCopied] = useState(false);
@@ -62,7 +68,7 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
   const todayStr = new Date().toISOString().split('T')[0];
 
   useEffect(() => {
-    if (!activeGroup) return;
+    if (!activeGroup || !user) return;
 
     let isMounted = true;
     setLoading(true);
@@ -70,12 +76,20 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
     Promise.all([
       DbService.getGroupMembers(activeGroup.id),
       DbService.getBookingsForDate(activeGroup.id, todayStr),
-      DbService.getGroupCourtConfig(activeGroup.id, todayStr)
-    ]).then(([mList, bList, config]) => {
+      DbService.getGroupCourtConfig(activeGroup.id, todayStr),
+      DbService.getUserBookingsAll(user.id, activeGroup.id)
+    ]).then(([mList, bList, config, userBookings]) => {
       if (isMounted) {
         setMembers(mList);
         setTodayBookings(bList);
         setCourtConfig(config);
+
+        // Find upcoming user booking
+        const upcoming = userBookings
+          .filter((b) => b.data >= todayStr)
+          .sort((a, b) => a.data.localeCompare(b.data) || a.horario_label.localeCompare(b.horario_label));
+        
+        setNextUserBooking(upcoming.length > 0 ? upcoming[0] : null);
         setLoading(false);
       }
     }).catch(err => {
@@ -86,7 +100,7 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [activeGroup?.id, todayStr]);
+  }, [activeGroup?.id, user?.id, todayStr]);
 
   if (!activeGroup || !user) return null;
 
@@ -131,7 +145,7 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
     pendingItems.push({
       id: 'unclassed_members',
       titulo: `${unclassedMembersList.length} ${unclassedMembersList.length === 1 ? 'jogador' : 'jogadores'} sem classe definida`,
-      descricao: 'Atribua a classe (A, B, C ou D) aos atletas ativos do clube.',
+      descricao: 'Atribua a classe aos atletas ativos do clube.',
       acaoTexto: 'Definir classe',
       tabTarget: 'members'
     });
@@ -140,7 +154,7 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
   if (!activeGroup.logo_url) {
     pendingItems.push({
       id: 'incomplete_group',
-      titulo: 'Configuração incompleta do grupo',
+      titulo: 'Configuração do grupo',
       descricao: 'Adicione uma foto de perfil ou logo oficial ao seu grupo de tênis.',
       acaoTexto: 'Configurar grupo',
       tabTarget: 'admin_panel'
@@ -148,6 +162,12 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
   }
 
   const firstName = user.nome.split(' ')[0];
+
+  const formatBookingDate = (dateStr: string) => {
+    if (dateStr === todayStr) return 'Hoje';
+    const [year, month, day] = dateStr.split('-');
+    return `${day}/${month}/${year}`;
+  };
 
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
@@ -227,7 +247,7 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
                 )}
               </div>
               <p className="text-xs text-slate-500 font-medium mt-0.5">
-                Aqui está o resumo do seu grupo hoje.
+                Painel do jogador • Tudo pronto para suas partidas.
               </p>
             </div>
           </div>
@@ -257,14 +277,14 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
               </div>
             )}
 
-            {/* Primary Action 1: Ver agenda */}
+            {/* Primary Action 1: Agendar Horário (Destacado) */}
             <button
               type="button"
               onClick={() => onNavigateTab('agenda')}
-              className="px-4 py-2.5 rounded-2xl bg-[#0F172A] hover:bg-slate-800 text-slate-200 font-extrabold text-xs shadow-xs transition-all flex items-center gap-2 cursor-pointer"
+              className="px-5 py-2.5 rounded-2xl bg-[#0F172A] hover:bg-slate-800 text-[#ccff00] font-black text-xs shadow-md transition-all flex items-center gap-2 cursor-pointer hover:scale-[1.02] active:scale-[0.98]"
             >
-              <CalendarDays className="w-4 h-4 text-slate-300" />
-              <span>Ver agenda</span>
+              <CalendarDays className="w-4 h-4 text-[#ccff00]" />
+              <span>Agendar Horário</span>
             </button>
 
             {/* Primary Action 2: Convidar jogadores (Apenas Proprietário / Administrador) */}
@@ -275,7 +295,7 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
                 className="px-4 py-2.5 rounded-2xl bg-white hover:bg-slate-100 text-slate-900 font-bold text-xs border border-slate-300 shadow-2xs transition-all flex items-center gap-2 cursor-pointer"
               >
                 <UserPlus className="w-4 h-4 text-slate-700" />
-                <span>{copied ? 'Código Copiado!' : 'Convidar jogadores'}</span>
+                <span>{copied ? 'Código Copiado!' : 'Convidar'}</span>
               </button>
             )}
 
@@ -287,7 +307,7 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
                 className="px-4 py-2.5 rounded-2xl bg-purple-50 hover:bg-purple-100 text-purple-900 font-extrabold text-xs border border-purple-200 shadow-2xs transition-all flex items-center gap-2 cursor-pointer"
               >
                 <Tag className="w-4 h-4 text-purple-700" />
-                <span>Configurar Classes</span>
+                <span>Classes</span>
               </button>
             )}
           </div>
@@ -295,76 +315,256 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
         </div>
       </div>
 
-      {/* 2. INDICADORES PRINCIPAIS (4 CARDS) */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        
-        {/* Card 1: Jogos de hoje */}
-        <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-2xs flex flex-col justify-between space-y-2">
-          <div className="flex items-center justify-between text-slate-400">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
-              Jogos de hoje
-            </span>
-            <CalendarDays className="w-4 h-4 text-slate-400" />
+      {/* 2. CARD DA PRÓXIMA RESERVA DO USUÁRIO */}
+      <div className="bg-white rounded-3xl p-5 sm:p-6 border border-slate-200 shadow-2xs">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+          <div className="flex items-center gap-2">
+            <CalendarCheck className="w-5 h-5 text-slate-900" />
+            <h3 className="text-base sm:text-lg font-black text-slate-900 tracking-tight">
+              Sua Próxima Reserva
+            </h3>
           </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl sm:text-3xl font-black text-slate-900">
-              {todaysGamesCount}
-            </span>
-            <span className="text-xs text-slate-500 font-medium">partidas</span>
-          </div>
+          {nextUserBooking && (
+            <button
+              type="button"
+              onClick={() => onNavigateTab('historico')}
+              className="text-xs font-bold text-slate-600 hover:text-slate-900 underline cursor-pointer"
+            >
+              Ver todas as minhas reservas
+            </button>
+          )}
         </div>
 
-        {/* Card 2: Horários livres */}
-        <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-2xs flex flex-col justify-between space-y-2">
-          <div className="flex items-center justify-between text-slate-400">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
-              Horários livres
-            </span>
-            <Clock className="w-4 h-4 text-slate-400" />
-          </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl sm:text-3xl font-black text-slate-900">
-              {freeSlotsCount}
-            </span>
-            <span className="text-xs text-slate-500 font-medium">vagas</span>
-          </div>
-        </div>
+        {nextUserBooking ? (
+          <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-[#0F172A] text-[#ccff00] font-black text-sm flex items-center justify-center shrink-0">
+                Q{nextUserBooking.quadra_numero}
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-black text-slate-900">
+                    Quadra {nextUserBooking.quadra_numero}
+                  </span>
+                  <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-extrabold uppercase">
+                    Confirmada
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 font-medium mt-0.5">
+                  📅 {formatBookingDate(nextUserBooking.data)} • ⏰ {nextUserBooking.horario_label}
+                </p>
+              </div>
+            </div>
 
-        {/* Card 3: Jogadores ativos */}
-        <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-2xs flex flex-col justify-between space-y-2">
-          <div className="flex items-center justify-between text-slate-400">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
-              Jogadores ativos
-            </span>
-            <Users className="w-4 h-4 text-slate-400" />
+            <div className="flex items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => onNavigateTab('agenda')}
+                className="px-4 py-2 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-[#ccff00] font-extrabold text-xs shadow-2xs transition-all cursor-pointer flex items-center gap-1.5"
+              >
+                <CalendarDays className="w-3.5 h-3.5" />
+                <span>Ver na agenda</span>
+              </button>
+            </div>
           </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl sm:text-3xl font-black text-slate-900">
-              {activeMembersCount}
-            </span>
-            <span className="text-xs text-slate-500 font-medium">atletas</span>
-          </div>
-        </div>
+        ) : (
+          <div className="bg-slate-50 rounded-2xl p-5 border border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-left">
+            <div className="flex items-center gap-3.5">
+              <div className="w-11 h-11 rounded-2xl bg-slate-200 text-slate-500 flex items-center justify-center shrink-0">
+                <Clock className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-slate-800">
+                  Você ainda não possui uma reserva ativa.
+                </p>
+                <p className="text-xs text-slate-500 font-medium mt-0.5">
+                  Consulte a agenda para escolher uma quadra e agendar seu próximo jogo.
+                </p>
+              </div>
+            </div>
 
-        {/* Card 4: Taxa de ocupação */}
-        <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-2xs flex flex-col justify-between space-y-2">
-          <div className="flex items-center justify-between text-slate-400">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
-              Taxa de ocupação
-            </span>
-            <Percent className="w-4 h-4 text-slate-400" />
+            <button
+              type="button"
+              onClick={() => onNavigateTab('agenda')}
+              className="px-5 py-2.5 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-[#ccff00] font-extrabold text-xs shadow-2xs transition-all cursor-pointer flex items-center gap-1.5 shrink-0"
+            >
+              <CalendarDays className="w-4 h-4" />
+              <span>Agendar horário</span>
+            </button>
           </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl sm:text-3xl font-black text-slate-900">
-              {occupancyRate}%
-            </span>
-            <span className="text-xs text-slate-500 font-medium">de uso</span>
-          </div>
-        </div>
-
+        )}
       </div>
 
-      {/* 3. PENDÊNCIAS ADMINISTRATIVAS (Apenas Proprietário / Administrador) */}
+      {/* 3. AÇÕES RÁPIDAS DO PERFIL */}
+      <div className="bg-white rounded-3xl p-5 sm:p-6 border border-slate-200 shadow-2xs space-y-4">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div className="flex items-center gap-2">
+            <Activity className="w-5 h-5 text-slate-900" />
+            <h3 className="text-base sm:text-lg font-black text-slate-900 tracking-tight">
+              Acesso Rápido
+            </h3>
+          </div>
+          <span className="text-xs font-bold text-slate-400">
+            {isOwnerOrAdmin ? 'Funções de Gestão & Jogo' : 'Funções do Jogador'}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+          
+          {/* 1. Agenda */}
+          <button
+            type="button"
+            onClick={() => onNavigateTab('agenda')}
+            className="p-4 rounded-2xl bg-slate-50 hover:bg-slate-100 border border-slate-200 flex flex-col items-center text-center group cursor-pointer transition-all hover:-translate-y-0.5"
+          >
+            <div className="w-10 h-10 rounded-xl bg-[#0F172A] text-[#ccff00] flex items-center justify-center mb-2 group-hover:scale-105 transition-transform">
+              <CalendarDays className="w-5 h-5" />
+            </div>
+            <span className="text-xs font-bold text-slate-900">Agenda de Quadras</span>
+            <span className="text-[10px] text-slate-500 mt-0.5">Reservar jogos</span>
+          </button>
+
+          {/* 2. Minhas Reservas */}
+          <button
+            type="button"
+            onClick={() => onNavigateTab('historico')}
+            className="p-4 rounded-2xl bg-slate-50 hover:bg-slate-100 border border-slate-200 flex flex-col items-center text-center group cursor-pointer transition-all hover:-translate-y-0.5"
+          >
+            <div className="w-10 h-10 rounded-xl bg-[#0F172A] text-[#ccff00] flex items-center justify-center mb-2 group-hover:scale-105 transition-transform">
+              <CalendarCheck className="w-5 h-5" />
+            </div>
+            <span className="text-xs font-bold text-slate-900">Minhas Reservas</span>
+            <span className="text-[10px] text-slate-500 mt-0.5">Histórico e jogos</span>
+          </button>
+
+          {/* 3. Jogadores */}
+          <button
+            type="button"
+            onClick={() => onNavigateTab('members')}
+            className="p-4 rounded-2xl bg-slate-50 hover:bg-slate-100 border border-slate-200 flex flex-col items-center text-center group cursor-pointer transition-all hover:-translate-y-0.5"
+          >
+            <div className="w-10 h-10 rounded-xl bg-[#0F172A] text-[#ccff00] flex items-center justify-center mb-2 group-hover:scale-105 transition-transform">
+              <Users className="w-5 h-5" />
+            </div>
+            <span className="text-xs font-bold text-slate-900">Jogadores</span>
+            <span className="text-[10px] text-slate-500 mt-0.5">Lista de atletas</span>
+          </button>
+
+          {/* 4. Perfil */}
+          <button
+            type="button"
+            onClick={() => onNavigateTab('profile')}
+            className="p-4 rounded-2xl bg-slate-50 hover:bg-slate-100 border border-slate-200 flex flex-col items-center text-center group cursor-pointer transition-all hover:-translate-y-0.5"
+          >
+            <div className="w-10 h-10 rounded-xl bg-[#0F172A] text-[#ccff00] flex items-center justify-center mb-2 group-hover:scale-105 transition-transform">
+              <UserCog className="w-5 h-5" />
+            </div>
+            <span className="text-xs font-bold text-slate-900">Meu Perfil</span>
+            <span className="text-[10px] text-slate-500 mt-0.5">Dados e classe</span>
+          </button>
+
+          {/* 5. Manual / Admin */}
+          {isOwnerOrAdmin ? (
+            <button
+              type="button"
+              onClick={() => onNavigateTab('admin_panel')}
+              className="p-4 rounded-2xl bg-slate-50 hover:bg-slate-100 border border-slate-200 flex flex-col items-center text-center group cursor-pointer transition-all hover:-translate-y-0.5"
+            >
+              <div className="w-10 h-10 rounded-xl bg-[#0F172A] text-[#ccff00] flex items-center justify-center mb-2 group-hover:scale-105 transition-transform">
+                <Sliders className="w-5 h-5" />
+              </div>
+              <span className="text-xs font-bold text-slate-900">Painel Admin</span>
+              <span className="text-[10px] text-slate-500 mt-0.5">Gestão de quadras</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onOpenManualPdf?.()}
+              className="p-4 rounded-2xl bg-slate-50 hover:bg-slate-100 border border-slate-200 flex flex-col items-center text-center group cursor-pointer transition-all hover:-translate-y-0.5"
+            >
+              <div className="w-10 h-10 rounded-xl bg-[#0F172A] text-[#ccff00] flex items-center justify-center mb-2 group-hover:scale-105 transition-transform">
+                <BookOpen className="w-5 h-5" />
+              </div>
+              <span className="text-xs font-bold text-slate-900">Manual de Ajuda</span>
+              <span className="text-[10px] text-slate-500 mt-0.5">Guia do usuário</span>
+            </button>
+          )}
+
+        </div>
+      </div>
+
+      {/* 4. INDICADORES DO GRUPO (Apenas Proprietário / Administrador) */}
+      {isOwnerOrAdmin && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          
+          {/* Card 1: Jogos de hoje */}
+          <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-2xs flex flex-col justify-between space-y-2">
+            <div className="flex items-center justify-between text-slate-400">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                Jogos de hoje
+              </span>
+              <CalendarDays className="w-4 h-4 text-slate-400" />
+            </div>
+            <div className="flex items-baseline gap-2">
+              <span className="text-2xl sm:text-3xl font-black text-slate-900">
+                {todaysGamesCount}
+              </span>
+              <span className="text-xs text-slate-500 font-medium">partidas</span>
+            </div>
+          </div>
+
+          {/* Card 2: Horários livres */}
+          <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-2xs flex flex-col justify-between space-y-2">
+            <div className="flex items-center justify-between text-slate-400">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                Horários livres
+              </span>
+              <Clock className="w-4 h-4 text-slate-400" />
+            </div>
+            <div className="flex items-baseline gap-2">
+              <span className="text-2xl sm:text-3xl font-black text-slate-900">
+                {freeSlotsCount}
+              </span>
+              <span className="text-xs text-slate-500 font-medium">vagas</span>
+            </div>
+          </div>
+
+          {/* Card 3: Jogadores ativos */}
+          <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-2xs flex flex-col justify-between space-y-2">
+            <div className="flex items-center justify-between text-slate-400">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                Jogadores ativos
+              </span>
+              <Users className="w-4 h-4 text-slate-400" />
+            </div>
+            <div className="flex items-baseline gap-2">
+              <span className="text-2xl sm:text-3xl font-black text-slate-900">
+                {activeMembersCount}
+              </span>
+              <span className="text-xs text-slate-500 font-medium">atletas</span>
+            </div>
+          </div>
+
+          {/* Card 4: Taxa de ocupação */}
+          <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-2xs flex flex-col justify-between space-y-2">
+            <div className="flex items-center justify-between text-slate-400">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                Taxa de ocupação
+              </span>
+              <Percent className="w-4 h-4 text-slate-400" />
+            </div>
+            <div className="flex items-baseline gap-2">
+              <span className="text-2xl sm:text-3xl font-black text-slate-900">
+                {occupancyRate}%
+              </span>
+              <span className="text-xs text-slate-500 font-medium">de uso</span>
+            </div>
+          </div>
+
+        </div>
+      )}
+
+      {/* 5. PENDÊNCIAS ADMINISTRATIVAS (Apenas Proprietário / Administrador) */}
       {isOwnerOrAdmin && (
         <div className="bg-white rounded-3xl p-5 sm:p-6 border border-slate-200 shadow-2xs space-y-4">
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
@@ -421,13 +621,13 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
         </div>
       )}
 
-      {/* 4. PRÓXIMOS JOGOS (MAX 5) */}
+      {/* 6. PRÓXIMOS JOGOS DE HOJE (MAX 5) */}
       <div className="bg-white rounded-3xl p-5 sm:p-6 border border-slate-200 shadow-2xs space-y-4">
         <div className="flex items-center justify-between border-b border-slate-100 pb-3">
           <div className="flex items-center gap-2">
             <CalendarDays className="w-5 h-5 text-slate-900" />
             <h3 className="text-base sm:text-lg font-black text-slate-900 tracking-tight">
-              Próximos jogos
+              Próximos jogos nas quadras hoje
             </h3>
           </div>
           <button
@@ -490,7 +690,7 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
         )}
       </div>
 
-      {/* 5. ATIVIDADE RECENTE (MAX 5) */}
+      {/* 7. ATIVIDADE RECENTE (MAX 5) */}
       <div className="bg-white rounded-3xl p-5 sm:p-6 border border-slate-200 shadow-2xs space-y-3">
         <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
           <Activity className="w-5 h-5 text-slate-900" />
@@ -533,3 +733,4 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
     </div>
   );
 };
+

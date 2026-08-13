@@ -88,6 +88,7 @@ export default function App() {
             setActiveTab={setActiveTab}
             onUpdateSession={handleUpdateSession}
             onOpenCreateGroup={() => setAuthModalMode('OWNER_REGISTER')}
+            onOpenManualPdf={() => setShowManualModal(true)}
             viewMode={viewMode}
           />
         </AppShell>

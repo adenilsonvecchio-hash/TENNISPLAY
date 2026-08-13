@@ -48,6 +48,7 @@ interface DashboardProps {
   setActiveTab: (tab: string) => void;
   onUpdateSession: (session: AuthSession) => void;
   onOpenCreateGroup: () => void;
+  onOpenManualPdf?: () => void;
   viewMode?: 'MANAGER' | 'PLAYER';
 }
 
@@ -57,6 +58,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   setActiveTab,
   onUpdateSession,
   onOpenCreateGroup,
+  onOpenManualPdf,
 }) => {
   const { user, activeGroup, activeRole } = session;
 
@@ -345,6 +347,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           session={session}
           onNavigateTab={setActiveTab}
           onRefreshSession={handleRefreshSession}
+          onOpenManualPdf={onOpenManualPdf}
         />
       )}
 
