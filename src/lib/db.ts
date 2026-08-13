@@ -11,13 +11,15 @@ const requireDb = () => {
   return db;
 };
 
-const fail = (context: string, error: unknown): never => {
-  const message = typeof error === 'object' && error && 'message' in error ? String((error as any).message) : String(error);
+const fail = (context: string, error?: unknown): never => {
+  const message = error ? (typeof error === 'object' && 'message' in error ? String((error as any).message) : String(error)) : '';
   if (message.includes('email rate limit exceeded') || message.includes('over_email_send_rate_limit')) {
     throw new Error('Limite temporário de envio de e-mails atingido. Aguarde alguns minutos antes de tentar novamente.');
   }
-  console.error(`[Supabase] ${context}:`, error);
-  throw new Error(`${context}: ${message}`);
+  if (error) {
+    console.error(`[Supabase] ${context}:`, error);
+  }
+  throw new Error(message ? `${context}: ${message}` : context);
 };
 
 const roleFromDb = (value: string): PerfilRole => ({ proprietario: 'PROPRIETARIO', administrador: 'ADMINISTRADOR', jogador: 'JOGADOR' }[value] || 'JOGADOR') as PerfilRole;
@@ -126,7 +128,7 @@ async function createGroup(userId: string, nome: string, cidade = '', estado = '
   const norm = normalizeLocation(cidade, estado);
   const descricao = [norm.cidade, norm.estado].filter(Boolean).join(' - ') || null;
 
-  // 5. A criação de grupo deve chamar exclusivamente: supabase.rpc('criar_grupo_com_proprietario', ...)
+  // Chamada exclusiva da RPC public.criar_grupo_com_proprietario
   const { data: rpcRes, error: rpcErr } = await db.rpc('criar_grupo_com_proprietario', {
     p_nome: nome.trim(),
     p_descricao: descricao,
@@ -134,12 +136,13 @@ async function createGroup(userId: string, nome: string, cidade = '', estado = '
   });
 
   if (rpcErr || !rpcRes) {
-    fail('Erro ao criar grupo', rpcErr || 'Resposta vazia da RPC criar_grupo_com_proprietario');
+    console.error('[Supabase RPC criar_grupo_com_proprietario Error]:', rpcErr?.code, rpcErr?.message, rpcErr);
+    fail('Erro ao criar grupo no Supabase: ' + (rpcErr?.message || 'Resposta vazia da RPC'), rpcErr);
   }
 
   const createdGroupId = typeof rpcRes === 'object' && rpcRes !== null && 'id' in rpcRes ? (rpcRes as any).id : rpcRes;
 
-  // 6. Após criar, carregar novamente o grupo da tabela public.grupos.
+  // Após criar, carregar o registro oficial de public.grupos
   const { data: groupRow, error: fetchErr } = await db
     .from('grupos')
     .select('*')
@@ -147,6 +150,7 @@ async function createGroup(userId: string, nome: string, cidade = '', estado = '
     .single();
 
   if (fetchErr || !groupRow) {
+    console.error('[Supabase Fetch Grupo Error]:', fetchErr?.code, fetchErr?.message, fetchErr);
     fail('Erro ao carregar grupo criado de public.grupos', fetchErr || 'Grupo não encontrado');
   }
 
@@ -155,20 +159,81 @@ async function createGroup(userId: string, nome: string, cidade = '', estado = '
   return mapGroup(groupRow);
 }
 
-async function completePendingOnboarding(user: any) {
-  const db = requireDb();
-  const { count, error: countError } = await db.from('membros_grupo').select('id', { count: 'exact', head: true }).eq('usuario_id', user.id);
-  if (countError) fail('Erro ao verificar cadastro', countError);
-  if ((count || 0) > 0) return;
-  const meta = user.user_metadata || {};
-  if (meta.onboarding_role === 'proprietario' && meta.nome_grupo) {
-    await createGroup(user.id, meta.nome_grupo, meta.cidade || '', meta.estado || '');
-  } else if (meta.onboarding_role === 'jogador' && meta.codigo_grupo) {
-    const code = String(meta.codigo_grupo).trim().toUpperCase();
-    const { data: rpcRes, error: rpcErr } = await db.rpc('entrar_grupo_por_codigo', { p_codigo: code });
-    if (rpcErr || !rpcRes || !rpcRes.success) {
-      fail('Código do grupo não encontrado ou erro ao solicitar entrada', rpcErr || rpcRes?.mensagem || code);
+let onboardingLockPromise: Promise<void> | null = null;
+
+async function completePendingOnboarding(user: any): Promise<void> {
+  if (onboardingLockPromise) {
+    await onboardingLockPromise;
+    return;
+  }
+
+  let resolveLock: () => void = () => {};
+  onboardingLockPromise = new Promise((resolve) => { resolveLock = resolve; });
+
+  try {
+    const db = requireDb();
+    
+    // 1. Consultar se o usuário já possui vínculo ativo ou pendente em membros_grupo
+    const { count, error: countError } = await db
+      .from('membros_grupo')
+      .select('id', { count: 'exact', head: true })
+      .eq('usuario_id', user.id);
+
+    if (countError) {
+      console.error('[Supabase Onboarding membros_grupo Check Error]:', countError.code, countError.message, countError);
     }
+
+    // Se já existir vínculo em membros_grupo, NÃO cria outro grupo nem chama a RPC novamente!
+    if (count && count > 0) {
+      return;
+    }
+
+    // 2. Verificar se há intenção de criação de grupo preservada em user_metadata
+    const meta = user.user_metadata || {};
+    const onboardingRole = meta.onboarding_role || meta.cadastro_type;
+
+    if (onboardingRole === 'proprietario' && meta.nome_grupo) {
+      console.log('[Onboarding] Sessão autenticada confirmada. Executando RPC criar_grupo_com_proprietario para:', meta.nome_grupo);
+      
+      await createGroup(user.id, meta.nome_grupo, meta.cidade || '', meta.estado || '');
+
+      // 3. Limpar intenção pendente de user_metadata no Supabase Auth após o sucesso da RPC
+      const { error: updateMetaErr } = await db.auth.updateUser({
+        data: {
+          onboarding_role: null,
+          cadastro_type: null,
+          nome_grupo: null,
+          cidade: null,
+          estado: null,
+        }
+      });
+
+      if (updateMetaErr) {
+        console.warn('[Supabase Metadata Cleanup Warning]:', updateMetaErr.message);
+      }
+    } else if (onboardingRole === 'jogador' && meta.codigo_grupo) {
+      const code = String(meta.codigo_grupo).trim().toUpperCase();
+      console.log('[Onboarding] Sessão autenticada confirmada. Executando RPC entrar_grupo_por_codigo para:', code);
+      
+      const { data: rpcRes, error: rpcErr } = await db.rpc('entrar_grupo_por_codigo', { p_codigo: code });
+
+      if (rpcErr) {
+        console.error('[Supabase entrar_grupo_por_codigo Error]:', rpcErr.code, rpcErr.message, rpcErr);
+      } else if (rpcRes && rpcRes.success) {
+        await db.auth.updateUser({
+          data: {
+            onboarding_role: null,
+            cadastro_type: null,
+            codigo_grupo: null,
+          }
+        });
+      }
+    }
+  } catch (err: any) {
+    console.error('[Onboarding Complete Exception]:', err.message || err);
+  } finally {
+    onboardingLockPromise = null;
+    resolveLock();
   }
 }
 
@@ -191,50 +256,130 @@ export const DbService = {
   async restoreSession(): Promise<AuthSession | null> {
     const db = getSupabaseClient();
     if (!db) return null;
+
     const { data, error } = await db.auth.getSession();
-    if (error) fail('Erro ao recuperar sessão', error);
-    return data.session?.user ? loadSession(data.session.user.id) : null;
+    if (error) {
+      console.error('[Supabase getSession Error]:', error.code, error.message, error);
+      fail('Erro ao recuperar sessão', error);
+    }
+
+    if (!data.session?.user) return null;
+
+    // Aguarda e executa eventual cadastro pendente em user_metadata assim que houver sessão válida
+    await completePendingOnboarding(data.session.user);
+
+    return loadSession(data.session.user.id);
   },
 
-  async registerProprietario(data: CadastroProprietarioData): Promise<AuthSession> {
+  async registerProprietario(data: CadastroProprietarioData): Promise<{
+    session: AuthSession | null;
+    requiresEmailConfirmation: boolean;
+    message?: string;
+  }> {
     const db = requireDb();
     const { data: auth, error } = await db.auth.signUp({
-      email: data.email.trim().toLowerCase(), password: data.senha,
-      options: { data: {
-        nome: data.nome.trim(), whatsapp: data.whatsapp.trim(), onboarding_role: 'proprietario',
-        nome_grupo: data.nomeGrupo.trim(), cidade: data.cidade.trim(), estado: data.estado.trim()
-      } }
+      email: data.email.trim().toLowerCase(),
+      password: data.senha,
+      options: {
+        data: {
+          nome: data.nome.trim(),
+          whatsapp: data.whatsapp.trim(),
+          onboarding_role: 'proprietario',
+          cadastro_type: 'proprietario',
+          nome_grupo: data.nomeGrupo.trim(),
+          cidade: data.cidade.trim(),
+          estado: data.estado.trim()
+        }
+      }
     });
-    if (error || !auth.user) fail('Erro ao cadastrar proprietário', error || 'Usuário não criado');
-    if (!auth.session) throw new Error('Confirme o e-mail recebido e depois faça login para criar o grupo.');
-    await createGroup(auth.user.id, data.nomeGrupo, data.cidade, data.estado);
-    return loadSession(auth.user.id);
+
+    if (error) {
+      console.error('[Supabase signUp Proprietário Error]:', error.code, error.message, error);
+      fail(error.message || 'Erro ao realizar cadastro do proprietário', error);
+    }
+
+    if (!auth.user) {
+      fail('Usuário não criado. Tente novamente.');
+    }
+
+    // Se o Supabase exigir confirmação de e-mail (session == null), orienta o usuário e preserva intenção no metadata
+    if (!auth.session) {
+      return {
+        session: null,
+        requiresEmailConfirmation: true,
+        message: 'Cadastro realizado. Confirme seu e-mail para continuar a criação do grupo.'
+      };
+    }
+
+    // Se a sessão já estiver ativa (e-mail auto-confirmado), conclui onboarding e carrega a sessão
+    await completePendingOnboarding(auth.user);
+    const session = await loadSession(auth.user.id);
+    return { session, requiresEmailConfirmation: false };
   },
 
-  async registerJogador(data: CadastroJogadorData): Promise<AuthSession> {
+  async registerJogador(data: CadastroJogadorData): Promise<{
+    session: AuthSession | null;
+    requiresEmailConfirmation: boolean;
+    message?: string;
+  }> {
     const db = requireDb();
     const code = (data.codigoGrupo || '').trim().toUpperCase();
+
     const { data: auth, error } = await db.auth.signUp({
-      email: data.email.trim().toLowerCase(), password: data.senha,
-      options: { data: {
-        nome: data.nome.trim(), whatsapp: data.whatsapp.trim(), onboarding_role: 'jogador',
-        codigo_grupo: code
-      } }
+      email: data.email.trim().toLowerCase(),
+      password: data.senha,
+      options: {
+        data: {
+          nome: data.nome.trim(),
+          whatsapp: data.whatsapp.trim(),
+          onboarding_role: 'jogador',
+          cadastro_type: 'jogador',
+          codigo_grupo: code
+        }
+      }
     });
-    if (error || !auth.user) fail('Erro ao cadastrar jogador', error || 'Usuário não criado');
-    if (!auth.session) throw new Error('Confirme o e-mail recebido e depois entre para solicitar acesso ao grupo.');
-    const { data: rpcRes, error: rpcErr } = await db.rpc('entrar_grupo_por_codigo', { p_codigo: code });
-    if (rpcErr || !rpcRes || !rpcRes.success) {
-      fail('Código do grupo não encontrado ou erro ao solicitar entrada', rpcErr || rpcRes?.mensagem || code);
+
+    if (error) {
+      console.error('[Supabase signUp Jogador Error]:', error.code, error.message, error);
+      fail(error.message || 'Erro ao realizar cadastro do jogador', error);
     }
-    return loadSession(auth.user.id);
+
+    if (!auth.user) {
+      fail('Usuário não criado. Tente novamente.');
+    }
+
+    if (!auth.session) {
+      return {
+        session: null,
+        requiresEmailConfirmation: true,
+        message: 'Cadastro realizado. Confirme seu e-mail para solicitar acesso ao grupo.'
+      };
+    }
+
+    await completePendingOnboarding(auth.user);
+    const session = await loadSession(auth.user.id);
+    return { session, requiresEmailConfirmation: false };
   },
 
   async login(email: string, senha: string): Promise<AuthSession> {
     const db = requireDb();
-    const { data, error } = await db.auth.signInWithPassword({ email: email.trim().toLowerCase(), password: senha });
-    if (error || !data.user) fail('E-mail ou senha incorretos', error || 'Usuário não encontrado');
+    const { data, error } = await db.auth.signInWithPassword({
+      email: email.trim().toLowerCase(),
+      password: senha
+    });
+
+    if (error) {
+      console.error('[Supabase signInWithPassword Error]:', error.code, error.message, error);
+      if (error.message?.includes('Email not confirmed') || error.code === 'email_not_confirmed') {
+        fail('E-mail não confirmado. Verifique sua caixa de entrada para confirmar seu e-mail e ative sua conta.');
+      }
+      fail('E-mail ou senha incorretos.', error);
+    }
+
+    if (!data.user) fail('Usuário não encontrado.');
+
     await completePendingOnboarding(data.user);
+
     return loadSession(data.user.id);
   },
 

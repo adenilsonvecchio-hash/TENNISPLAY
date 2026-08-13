@@ -226,8 +226,37 @@ export const Dashboard: React.FC<DashboardProps> = ({
     );
   }
 
+  const currentMember = session.membros.find(
+    (m) => m.usuario_id === user?.id && m.grupo_id === activeGroup?.id
+  );
+  const isPendingMember = currentMember?.status === 'PENDENTE';
+
   return (
     <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+      
+      {/* BANNER DE SOLICITAÇÃO PENDENTE DE APROVAÇÃO */}
+      {isPendingMember && (
+        <div className="p-4 rounded-3xl bg-amber-50 border-2 border-amber-200/90 text-amber-900 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-in fade-in">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+              <Clock className="w-5 h-5 animate-pulse" />
+            </div>
+            <div>
+              <h3 className="font-black text-sm text-amber-950 uppercase tracking-wider">Acesso Pendente de Aprovação</h3>
+              <p className="text-xs text-amber-800 font-medium mt-0.5">
+                Sua solicitação de acesso ao grupo <strong className="font-extrabold">{activeGroup?.nome}</strong> está em análise pelo proprietário.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleRefreshSession}
+            className="w-full sm:w-auto px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs shadow-2xs transition-all cursor-pointer shrink-0"
+          >
+            Atualizar Status
+          </button>
+        </div>
+      )}
       
       {/* 1. VISÃO GERAL */}
       {activeTab === 'overview' && (

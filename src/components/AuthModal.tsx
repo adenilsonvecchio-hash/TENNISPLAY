@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { CadastroProprietarioData, CadastroJogadorData, AuthSession, ESTADOS_BRASIL } from '../types';
 import { DbService } from '../lib/db';
-import { X, Building2, ShieldCheck, UserCheck, AlertCircle, ArrowRight, Lock, Mail, Phone, User, MapPin, KeyRound } from 'lucide-react';
+import { X, Building2, ShieldCheck, UserCheck, AlertCircle, ArrowRight, Lock, Mail, Phone, User, MapPin, KeyRound, CheckCircle2 } from 'lucide-react';
 
 interface AuthModalProps {
   mode: 'OWNER_REGISTER' | 'ADMIN_LOGIN' | 'PLAYER_REGISTER' | 'LOGIN';
@@ -17,7 +17,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   onChangeMode,
 }) => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const setMode = (newMode: 'OWNER_REGISTER' | 'ADMIN_LOGIN' | 'PLAYER_REGISTER' | 'LOGIN') => {
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    onChangeMode(newMode);
+  };
 
   // Form states
   const [email, setEmail] = useState('');
@@ -33,6 +40,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
+    setSuccessMessage(null);
     setLoading(true);
 
     try {
@@ -48,6 +56,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const handleOwnerRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
+    setSuccessMessage(null);
 
     if (senha !== confirmarSenha) {
       setErrorMessage('As senhas não coincidem. Digite novamente.');
@@ -68,8 +77,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         estado,
       };
 
-      const session = await DbService.registerProprietario(data);
-      onSuccess(session);
+      const result = await DbService.registerProprietario(data);
+      if (result.requiresEmailConfirmation) {
+        setSuccessMessage(result.message || 'Cadastro realizado. Confirme seu e-mail para continuar a criação do grupo.');
+      } else if (result.session) {
+        onSuccess(result.session);
+      }
     } catch (err: any) {
       setErrorMessage(err.message || 'Erro ao cadastrar proprietário e grupo.');
     } finally {
@@ -80,6 +93,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const handlePlayerRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
+    setSuccessMessage(null);
 
     if (senha !== confirmarSenha) {
       setErrorMessage('As senhas não coincidem. Digite novamente.');
@@ -103,8 +117,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         codigoGrupo: codigoGrupo.trim(),
       };
 
-      const session = await DbService.registerJogador(data);
-      onSuccess(session);
+      const result = await DbService.registerJogador(data);
+      if (result.requiresEmailConfirmation) {
+        setSuccessMessage(result.message || 'Cadastro realizado. Confirme seu e-mail para solicitar acesso ao grupo.');
+      } else if (result.session) {
+        onSuccess(result.session);
+      }
     } catch (err: any) {
       setErrorMessage(err.message || 'Erro ao realizar cadastro do jogador.');
     } finally {
@@ -190,6 +208,29 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <div className="flex-1">
               <p className="font-bold">Atenção</p>
               <p className="mt-0.5">{errorMessage}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Success / Email Confirmation Alert */}
+        {successMessage && (
+          <div className="mx-6 sm:mx-8 mt-6 p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs sm:text-sm font-medium flex flex-col gap-3">
+            <div className="flex items-start gap-3">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="font-extrabold text-sm text-emerald-950">Confirmação de E-mail Enviada</p>
+                <p className="mt-1 text-emerald-800 leading-relaxed font-medium">{successMessage}</p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-emerald-200/60">
+              <button
+                type="button"
+                onClick={() => setMode('LOGIN')}
+                className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs shadow-xs transition-all cursor-pointer flex items-center gap-1.5"
+              >
+                <span>Ir para Tela de Login</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
             </div>
           </div>
         )}
