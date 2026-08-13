@@ -94,7 +94,14 @@ export const AppShell: React.FC<AppShellProps> = ({
     }
   };
 
-  const isOwnerOrAdmin = activeRole === 'PROPRIETARIO' || activeRole === 'ADMINISTRADOR';
+  const currentMember = session.membros.find(
+    (m) => m.usuario_id === user?.id && m.grupo_id === activeGroup?.id
+  );
+  const userRole = currentMember?.perfil || session.activeRole || 'JOGADOR';
+  const userStatus = currentMember?.status || 'PENDENTE';
+
+  const isOwnerOrAdmin = (userRole === 'PROPRIETARIO' || userRole === 'ADMINISTRADOR') && userStatus === 'ATIVO';
+  const isPendingMember = userStatus === 'PENDENTE';
 
   const getRoleBadgeLabel = (perfil: string | null) => {
     switch (perfil) {
@@ -183,7 +190,7 @@ export const AppShell: React.FC<AppShellProps> = ({
                     {/* Selo discreto do Perfil */}
                     <div className="mt-2 flex items-center gap-1.5">
                       <span className="px-2 py-0.5 rounded-md bg-[#0B1633] text-slate-200 text-[10px] font-black uppercase tracking-wider">
-                        {getRoleBadgeLabel(activeRole)}
+                        {getRoleBadgeLabel(userRole)}
                       </span>
                     </div>
                   </div>

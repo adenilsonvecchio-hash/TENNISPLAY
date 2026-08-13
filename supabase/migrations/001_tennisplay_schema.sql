@@ -230,6 +230,9 @@ BEGIN
   RETURN EXISTS (
     SELECT 1 FROM public.grupos
     WHERE id = p_grupo_id AND proprietario_id = auth.uid()
+  ) OR EXISTS (
+    SELECT 1 FROM public.membros_grupo
+    WHERE grupo_id = p_grupo_id AND usuario_id = auth.uid() AND papel = 'proprietario' AND status = 'ativo'
   );
 END;
 $$;
@@ -380,38 +383,59 @@ SET search_path = public
 AS $$
 DECLARE
   v_is_owner BOOLEAN;
+  v_current_user_id UUID := auth.uid();
 BEGIN
+  -- Verificar se o usuário autenticado é o proprietário ativo do mesmo grupo
   v_is_owner := public.e_proprietario_do_grupo(OLD.grupo_id);
 
-  -- Impedir usuários (exceto o proprietário do grupo) de alterar seu próprio papel, status ou classe
-  IF OLD.usuario_id = auth.uid() AND NOT v_is_owner THEN
+  -- 1. Imutabilidade de usuario_id e grupo_id
+  IF NEW.usuario_id IS DISTINCT FROM OLD.usuario_id OR NEW.grupo_id IS DISTINCT FROM OLD.grupo_id THEN
+    RAISE EXCEPTION 'Não é permitido alterar usuario_id ou grupo_id do vínculo.';
+  END IF;
+
+  -- 2. Impedir jogadores comuns ou administradores de alterarem seu próprio papel, status ou classe
+  IF OLD.usuario_id = v_current_user_id AND NOT v_is_owner THEN
     IF OLD.papel IS DISTINCT FROM NEW.papel OR
        OLD.status IS DISTINCT FROM NEW.status OR
        OLD.classe IS DISTINCT FROM NEW.classe THEN
-      
-      -- Permitir exclusivamente rebaixamento interno de proprietário para administrador durante transferência de propriedade (pg_trigger_depth > 1)
-      IF NOT (
-        pg_trigger_depth() > 1 AND
-        OLD.papel = 'proprietario' AND
-        NEW.papel = 'administrador' AND
-        OLD.usuario_id = auth.uid() AND
-        OLD.grupo_id = NEW.grupo_id AND
-        OLD.usuario_id = NEW.usuario_id AND
-        OLD.status = NEW.status AND
-        OLD.classe IS NOT DISTINCT FROM NEW.classe AND
-        EXISTS (
-          SELECT 1 FROM public.grupos
-          WHERE id = OLD.grupo_id AND proprietario_id = auth.uid()
-        )
-      ) THEN
-        RAISE EXCEPTION 'Não é permitido alterar o próprio papel, status ou classe.';
-      END IF;
+      RAISE EXCEPTION 'Não é permitido alterar o próprio papel, status ou classe.';
     END IF;
   END IF;
 
-  -- Regras sobre o papel de proprietario
-  IF (OLD.papel = 'proprietario' OR NEW.papel = 'proprietario') AND NOT v_is_owner THEN
-    RAISE EXCEPTION 'Somente o proprietário do grupo pode atribuir, alterar ou remover o papel de proprietário.';
+  -- 3. Impedir que administradores ou outros membros alterem qualquer dado do PROPRIETÁRIO
+  IF OLD.papel = 'proprietario' AND NOT v_is_owner THEN
+    RAISE EXCEPTION 'Somente o proprietário do grupo pode alterar seu próprio registro ou papel de proprietário.';
+  END IF;
+
+  -- 4. Impedir que não-proprietários atribuam o papel 'proprietario' a alguém
+  IF NEW.papel = 'proprietario' AND OLD.papel IS DISTINCT FROM 'proprietario' AND NOT v_is_owner THEN
+    RAISE EXCEPTION 'Somente o proprietário do grupo pode atribuir o papel de proprietário.';
+  END IF;
+
+  -- 5. Garantir que alterar a classe do proprietário NUNCA altere seu papel de proprietario
+  IF OLD.papel = 'proprietario' AND NEW.papel IS DISTINCT FROM 'proprietario' AND NOT (pg_trigger_depth() > 1) THEN
+    RAISE EXCEPTION 'Alterar a classe não pode alterar o papel de proprietário do usuário.';
+  END IF;
+
+  -- 6. Registro de Auditoria para alteração de classe
+  IF OLD.classe IS DISTINCT FROM NEW.classe THEN
+    INSERT INTO public.notificacoes (
+      grupo_id,
+      usuario_id,
+      titulo,
+      mensagem,
+      tipo,
+      lida,
+      criado_em
+    ) VALUES (
+      NEW.grupo_id,
+      NEW.usuario_id,
+      'Alteração de Classe',
+      'Classe alterada de "' || COALESCE(OLD.classe, 'Sem Classe') || '" para "' || COALESCE(NEW.classe, 'Sem Classe') || '" por ' || COALESCE(v_current_user_id::text, 'Sistema') || ' em ' || TO_CHAR(NOW(), 'DD/MM/YYYY HH24:MI'),
+      'CLASSE_ALTERADA',
+      FALSE,
+      NOW()
+    );
   END IF;
 
   RETURN NEW;

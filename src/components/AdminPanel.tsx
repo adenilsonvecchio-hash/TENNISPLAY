@@ -164,6 +164,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ session, onRefreshSessio
       await DbService.updateMemberClass(memberId, classe);
       await loadAdminData();
       onRefreshSession();
+      const currentMem = session.membros.find(m => m.usuario_id === user?.id && m.grupo_id === activeGroup?.id);
+      if (currentMem && memberId === currentMem.id) {
+        alert('Sua classe foi atualizada com sucesso');
+      } else {
+        alert('Classe do atleta atualizada com sucesso!');
+      }
     } catch (err: any) {
       alert(err.message || 'Erro ao alterar classe.');
     }
@@ -413,47 +419,73 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ session, onRefreshSessio
           <div className="divide-y divide-slate-100">
             {activeMembers
               .filter(m => (m.usuario?.nome || '').toLowerCase().includes(searchTerm.toLowerCase()))
-              .map((m) => (
-                <div key={m.id} className="py-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-2xl bg-emerald-100 text-emerald-900 font-black flex items-center justify-center text-xs">
-                      {m.usuario?.nome ? m.usuario.nome.substring(0, 2) : 'U'}
+              .map((m) => {
+                const currentMem = session.membros.find(mem => mem.usuario_id === user?.id && mem.grupo_id === activeGroup?.id);
+                const isCurrentOwner = currentMem?.perfil === 'PROPRIETARIO';
+                const isTargetOwner = m.perfil === 'PROPRIETARIO';
+                const isSelf = currentMem?.id === m.id;
+                // Owner can edit any active member's class (including self). Admin can edit non-owner members.
+                const canEditClass = isCurrentOwner || (!isTargetOwner && currentMem?.perfil === 'ADMINISTRADOR');
+
+                return (
+                  <div key={m.id} className="py-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-2xl bg-emerald-100 text-emerald-900 font-black flex items-center justify-center text-xs">
+                        {m.usuario?.nome ? m.usuario.nome.substring(0, 2) : 'U'}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <p className="font-bold text-slate-900 text-sm">{m.usuario?.nome}</p>
+                          {isTargetOwner && (
+                            <span className="px-2 py-0.5 rounded-md bg-[#0B1633] text-[#ccff00] text-[10px] font-black uppercase tracking-wider">
+                              Proprietário {isSelf ? '(Você)' : ''}
+                            </span>
+                          )}
+                          {m.perfil === 'ADMINISTRADOR' && (
+                            <span className="px-2 py-0.5 rounded-md bg-indigo-950 text-white text-[10px] font-black uppercase tracking-wider">
+                              Admin
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-500">{m.usuario?.email} • 📱 {m.usuario?.whatsapp}</p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="font-bold text-slate-900 text-sm">{m.usuario?.nome}</p>
-                      <p className="text-xs text-slate-500">{m.usuario?.email} • 📱 {m.usuario?.whatsapp}</p>
+
+                    <div className="flex items-center gap-3">
+                      {/* Class Selector */}
+                      <select
+                        value={m.classe || 'Sem Classe'}
+                        disabled={!canEditClass}
+                        onChange={(e) => handleUpdateClass(m.id, e.target.value as PlayerClass)}
+                        className={`px-3 py-1.5 rounded-xl border text-xs font-bold text-slate-800 ${
+                          !canEditClass ? 'bg-slate-100 border-slate-200 cursor-not-allowed opacity-60' : 'bg-slate-50 border-slate-200 cursor-pointer hover:bg-slate-100'
+                        }`}
+                      >
+                        <option value="Sem Classe">Sem Classe</option>
+                        <option value="Classe A (1º)">Classe A (1º)</option>
+                        <option value="Classe B (2º)">Classe B (2º)</option>
+                        <option value="Classe C (3º)">Classe C (3º)</option>
+                        <option value="Classe D (4º)">Classe D (4º)</option>
+                        <option value="Classe E (5º)">Classe E (5º)</option>
+                        <option value="Classe F (6º)">Classe F (6º)</option>
+                        <option value="Classe G (7º)">Classe G (7º)</option>
+                        <option value="Classe Infantil">Classe Infantil</option>
+                        <option value="Classe Juvenil">Classe Juvenil</option>
+                        <option value="Classe (50+)">Classe (50+)</option>
+                      </select>
+
+                      {!isTargetOwner && (
+                        <button
+                          onClick={() => handleBlockMember(m.id)}
+                          className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold border border-rose-200 cursor-pointer"
+                        >
+                          Bloquear
+                        </button>
+                      )}
                     </div>
                   </div>
-
-                  <div className="flex items-center gap-3">
-                    {/* Class Selector */}
-                    <select
-                      value={m.classe || 'Sem Classe'}
-                      onChange={(e) => handleUpdateClass(m.id, e.target.value as PlayerClass)}
-                      className="px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-bold text-slate-800"
-                    >
-                      <option value="Classe A (1º)">Classe A (1º)</option>
-                      <option value="Classe B (2º)">Classe B (2º)</option>
-                      <option value="Classe C (3º)">Classe C (3º)</option>
-                      <option value="Classe D (4º)">Classe D (4º)</option>
-                      <option value="Classe E (5º)">Classe E (5º)</option>
-                      <option value="Classe F (6º)">Classe F (6º)</option>
-                      <option value="Classe G (7º)">Classe G (7º)</option>
-                      <option value="Classe Infantil">Classe Infantil</option>
-                      <option value="Classe Juvenil">Classe Juvenil</option>
-                      <option value="Classe (50+)">Classe (50+)</option>
-                      <option value="Sem Classe">Sem Classe</option>
-                    </select>
-
-                    <button
-                      onClick={() => handleBlockMember(m.id)}
-                      className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold border border-rose-200"
-                    >
-                      Bloquear
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
           </div>
         </div>
       )}
@@ -644,6 +676,77 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ session, onRefreshSessio
                 <Plus className="w-3.5 h-3.5" />
                 <span>Adicionar Classe</span>
               </button>
+            </div>
+          </div>
+
+          {/* ATRIBUIR CLASSE AOS INTEGRANTES (INCLUINDO PROPRIETÁRIO) */}
+          <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-4">
+            <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+              <Users className="w-4 h-4 text-violet-700" />
+              <span>Classes Atribuídas aos Integrantes do Grupo</span>
+            </h4>
+            <p className="text-xs text-slate-500">
+              Defina individualmente a classe de cada membro do clube. O proprietário e os administradores têm sua classe atualizada imediatamente.
+            </p>
+
+            <div className="divide-y divide-slate-200/60 bg-white rounded-2xl p-4 border border-slate-200 space-y-2">
+              {activeMembers.map((m) => {
+                const currentMem = session.membros.find(mem => mem.usuario_id === user?.id && mem.grupo_id === activeGroup?.id);
+                const isCurrentOwner = currentMem?.perfil === 'PROPRIETARIO';
+                const isTargetOwner = m.perfil === 'PROPRIETARIO';
+                const isSelf = currentMem?.id === m.id;
+                const canEditClass = isCurrentOwner || (!isTargetOwner && currentMem?.perfil === 'ADMINISTRADOR');
+
+                return (
+                  <div key={m.id} className="pt-2.5 pb-2.5 first:pt-0 last:pb-0 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-xl bg-violet-100 text-violet-900 font-extrabold flex items-center justify-center text-xs">
+                        {m.usuario?.nome ? m.usuario.nome.substring(0, 2) : 'U'}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-extrabold text-slate-900 text-xs">{m.usuario?.nome}</span>
+                          {isTargetOwner && (
+                            <span className="px-1.5 py-0.5 rounded bg-[#0B1633] text-[#ccff00] text-[9px] font-black uppercase tracking-wider">
+                              Proprietário {isSelf ? '(Você)' : ''}
+                            </span>
+                          )}
+                          {m.perfil === 'ADMINISTRADOR' && (
+                            <span className="px-1.5 py-0.5 rounded bg-indigo-950 text-white text-[9px] font-black uppercase tracking-wider">
+                              Admin
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-slate-400 font-medium">{m.usuario?.email}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-extrabold uppercase text-slate-400">Classe Atual:</span>
+                      <select
+                        value={m.classe || 'Sem Classe'}
+                        disabled={!canEditClass}
+                        onChange={(e) => handleUpdateClass(m.id, e.target.value as PlayerClass)}
+                        className={`px-3 py-1.5 rounded-xl border text-xs font-bold text-slate-800 ${
+                          !canEditClass ? 'bg-slate-100 border-slate-200 cursor-not-allowed opacity-60' : 'bg-slate-50 border-slate-200 cursor-pointer hover:bg-slate-100'
+                        }`}
+                      >
+                        <option value="Sem Classe">Sem Classe</option>
+                        <option value="Classe A (1º)">Classe A (1º)</option>
+                        <option value="Classe B (2º)">Classe B (2º)</option>
+                        <option value="Classe C (3º)">Classe C (3º)</option>
+                        <option value="Classe D (4º)">Classe D (4º)</option>
+                        <option value="Classe E (5º)">Classe E (5º)</option>
+                        <option value="Classe F (6º)">Classe F (6º)</option>
+                        <option value="Classe G (7º)">Classe G (7º)</option>
+                        <option value="Classe Infantil">Classe Infantil</option>
+                        <option value="Classe Juvenil">Classe Juvenil</option>
+                        <option value="Classe (50+)">Classe (50+)</option>
+                      </select>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
 

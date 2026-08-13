@@ -432,6 +432,16 @@ export const DbService = {
     return this.getGroupMembers(current.grupo_id);
   },
 
+  async cancelMembershipRequest(memberId: string, userId: string): Promise<AuthSession> {
+    const db = requireDb();
+    const { error } = await db.from('membros_grupo').delete().eq('id', memberId).eq('usuario_id', userId);
+    if (error) {
+      console.error('[Supabase Delete Membro Error]:', error.code, error.message, error);
+      fail('Erro ao cancelar solicitação', error);
+    }
+    return loadSession(userId);
+  },
+
   async updateGroupInfo(groupId: string, values: Partial<Grupo>): Promise<Grupo> {
     const payload: Record<string, unknown> = {};
     if (values.nome !== undefined) payload.nome = values.nome;

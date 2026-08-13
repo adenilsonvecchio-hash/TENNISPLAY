@@ -36,7 +36,9 @@ import {
   Camera,
   Upload,
   Image as ImageIcon,
-  Trash2
+  Trash2,
+  RefreshCw,
+  LogOut
 } from 'lucide-react';
 
 interface DashboardProps {
@@ -137,15 +139,53 @@ export const Dashboard: React.FC<DashboardProps> = ({
     (m) => m.status === 'ATIVO' || m.status === 'PENDENTE'
   );
 
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isCanceling, setIsCanceling] = useState(false);
+
   const handleRefreshSession = async () => {
     if (user) {
+      setIsRefreshing(true);
       try {
         const updated = await DbService.loadSession(user.id);
         onUpdateSession(updated);
       } catch (err) {
         console.error('Erro ao atualizar sessão:', err);
+      } finally {
+        setIsRefreshing(false);
       }
     }
+  };
+
+  const currentMember = session.membros.find(
+    (m) => m.usuario_id === user?.id && m.grupo_id === activeGroup?.id
+  );
+
+  const userRole = currentMember?.perfil || session.activeRole || 'JOGADOR';
+  const userStatus = currentMember?.status || 'PENDENTE';
+
+  const isPending = userStatus === 'PENDENTE';
+  const isOwner = userRole === 'PROPRIETARIO' && userStatus === 'ATIVO';
+  const isAdmin = userRole === 'ADMINISTRADOR' && userStatus === 'ATIVO';
+  const isOwnerOrAdmin = isOwner || isAdmin;
+
+  const handleCancelRequest = async () => {
+    if (!currentMember || !user) return;
+    if (!confirm('Deseja realmente cancelar sua solicitação de entrada no grupo?')) return;
+
+    setIsCanceling(true);
+    try {
+      const updated = await DbService.cancelMembershipRequest(currentMember.id, user.id);
+      onUpdateSession(updated);
+    } catch (err: any) {
+      alert(err.message || 'Erro ao cancelar solicitação.');
+    } finally {
+      setIsCanceling(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    await DbService.logout();
+    onUpdateSession(null as any);
   };
 
   if (!user) return null;
@@ -226,37 +266,76 @@ export const Dashboard: React.FC<DashboardProps> = ({
     );
   }
 
-  const currentMember = session.membros.find(
-    (m) => m.usuario_id === user?.id && m.grupo_id === activeGroup?.id
-  );
-  const isPendingMember = currentMember?.status === 'PENDENTE';
+  /* BARREIRA DE ACESSO EXCLUSIVA PARA JOGADOR PENDENTE */
+  if (isPending) {
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-12 animate-in fade-in duration-200">
+        <div className="bg-white rounded-3xl p-6 sm:p-8 border border-amber-200/80 shadow-xl space-y-6 text-center">
+          <div className="w-16 h-16 bg-amber-50 text-amber-600 rounded-3xl flex items-center justify-center mx-auto text-3xl shadow-xs">
+            <Clock className="w-8 h-8 animate-pulse text-amber-600" />
+          </div>
+
+          <div className="space-y-2">
+            <span className="px-3 py-1 rounded-full bg-amber-100 text-amber-900 border border-amber-200 text-xs font-black uppercase tracking-wider">
+              Acesso Pendente de Aprovação
+            </span>
+            <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight pt-2">
+              {activeGroup?.nome}
+            </h2>
+            <p className="text-sm text-slate-600 max-w-md mx-auto font-medium">
+              Sua solicitação está aguardando aprovação.
+            </p>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-amber-50/70 border border-amber-200/60 text-left text-xs text-amber-900 space-y-1">
+            <p className="font-extrabold flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>O que acontece agora?</span>
+            </p>
+            <p className="pl-6 text-amber-800">
+              O proprietário ou administrador do grupo analisará sua solicitação para liberar seu acesso às quadras e agendamentos.
+            </p>
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+            <button
+              type="button"
+              onClick={handleRefreshSession}
+              disabled={isRefreshing}
+              className="w-full sm:w-auto px-6 py-3 rounded-2xl bg-[#0F172A] hover:bg-slate-800 text-[#ccff00] font-extrabold text-xs shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+              <span>Atualizar status</span>
+            </button>
+
+            {currentMember && (
+              <button
+                type="button"
+                onClick={handleCancelRequest}
+                disabled={isCanceling}
+                className="w-full sm:w-auto px-6 py-3 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-extrabold text-xs border border-rose-200 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                <XCircle className="w-4 h-4 text-rose-600" />
+                <span>Cancelar solicitação</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="w-full sm:w-auto px-6 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <LogOut className="w-4 h-4 text-slate-500" />
+              <span>Sair da conta</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-      
-      {/* BANNER DE SOLICITAÇÃO PENDENTE DE APROVAÇÃO */}
-      {isPendingMember && (
-        <div className="p-4 rounded-3xl bg-amber-50 border-2 border-amber-200/90 text-amber-900 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-in fade-in">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
-              <Clock className="w-5 h-5 animate-pulse" />
-            </div>
-            <div>
-              <h3 className="font-black text-sm text-amber-950 uppercase tracking-wider">Acesso Pendente de Aprovação</h3>
-              <p className="text-xs text-amber-800 font-medium mt-0.5">
-                Sua solicitação de acesso ao grupo <strong className="font-extrabold">{activeGroup?.nome}</strong> está em análise pelo proprietário.
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={handleRefreshSession}
-            className="w-full sm:w-auto px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs shadow-2xs transition-all cursor-pointer shrink-0"
-          >
-            Atualizar Status
-          </button>
-        </div>
-      )}
       
       {/* 1. VISÃO GERAL */}
       {activeTab === 'overview' && (
@@ -283,8 +362,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
         />
       )}
 
-      {/* 4. ADMINISTRAÇÃO & CLASSES */}
-      {(activeTab === 'admin_panel' || activeTab === 'admin_classes') && (
+      {/* 4. ADMINISTRAÇÃO & CLASSES (PROTEGIDO) */}
+      {(activeTab === 'admin_panel' || activeTab === 'admin_classes') && isOwnerOrAdmin && (
         <AdminPanel
           session={session}
           onRefreshSession={handleRefreshSession}

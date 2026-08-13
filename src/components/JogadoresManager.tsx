@@ -93,6 +93,10 @@ export const JogadoresManager: React.FC<JogadoresManagerProps> = ({ session, onR
       if (onRefreshSession) {
         await onRefreshSession();
       }
+      const currentMem = session.membros.find(m => m.usuario_id === user?.id && m.grupo_id === activeGroup?.id);
+      if (currentMem && memberId === currentMem.id) {
+        alert('Sua classe foi atualizada com sucesso');
+      }
     } catch (err: any) {
       alert(err.message || 'Erro ao alterar classe.');
       loadMembers();
@@ -363,6 +367,7 @@ export const JogadoresManager: React.FC<JogadoresManagerProps> = ({ session, onR
                         <span className="text-[10px] font-extrabold uppercase text-slate-400">Classe:</span>
                         <select
                           value={m.classe || 'Sem Classe'}
+                          disabled={m.perfil === 'PROPRIETARIO' && activeRole !== 'PROPRIETARIO'}
                           onChange={(e) => {
                             const newCls = e.target.value as PlayerClass;
                             if (m.status === 'PENDENTE') {
@@ -371,7 +376,9 @@ export const JogadoresManager: React.FC<JogadoresManagerProps> = ({ session, onR
                               handleUpdateClass(m.id, newCls);
                             }
                           }}
-                          className="bg-transparent text-xs font-black text-slate-900 focus:outline-none cursor-pointer"
+                          className={`bg-transparent text-xs font-black text-slate-900 focus:outline-none ${
+                            m.perfil === 'PROPRIETARIO' && activeRole !== 'PROPRIETARIO' ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
+                          }`}
                         >
                           <option value="Sem Classe">Sem Classe</option>
                           <option value="Classe A (1º)">Classe A (1º)</option>

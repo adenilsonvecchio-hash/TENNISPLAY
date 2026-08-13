@@ -77,7 +77,7 @@ export const PerfilUsuario: React.FC<PerfilUsuarioProps> = ({ session, onRefresh
         foto_url: fotoUrlInput
       });
       if (currentMember) {
-        if (currentMember.classe !== classeInput) {
+        if (currentMember.perfil === 'PROPRIETARIO' && currentMember.classe !== classeInput) {
           await DbService.updateMemberClass(currentMember.id, classeInput);
         }
         if (currentMember.perfil !== papelInput) {
@@ -89,7 +89,7 @@ export const PerfilUsuario: React.FC<PerfilUsuarioProps> = ({ session, onRefresh
       }
       setIsEditingProfile(false);
       onRefreshSession();
-      setFeedback({ type: 'success', message: 'Perfil e dados do grupo atualizados com sucesso!' });
+      setFeedback({ type: 'success', message: 'Sua classe foi atualizada com sucesso' });
       setTimeout(() => setFeedback(null), 3500);
     } catch (err: any) {
       setFeedback({ type: 'error', message: err.message || 'Erro ao atualizar perfil.' });
@@ -263,11 +263,19 @@ export const PerfilUsuario: React.FC<PerfilUsuarioProps> = ({ session, onRefresh
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs font-bold uppercase text-slate-500">Sua Classe no Grupo</label>
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold uppercase text-slate-500">Sua Classe no Grupo</label>
+                {currentMember?.perfil !== 'PROPRIETARIO' && (
+                  <span className="text-[10px] text-slate-400 font-semibold">Definida pelo proprietário</span>
+                )}
+              </div>
               <select
                 value={classeInput}
+                disabled={currentMember?.perfil !== 'PROPRIETARIO'}
                 onChange={(e) => setClasseInput(e.target.value as PlayerClass)}
-                className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900 cursor-pointer"
+                className={`w-full px-4 py-2.5 rounded-2xl border text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900 ${
+                  currentMember?.perfil !== 'PROPRIETARIO' ? 'bg-slate-100 border-slate-200 cursor-not-allowed opacity-60' : 'bg-slate-50 border-slate-200 cursor-pointer'
+                }`}
               >
                 <option value="Sem Classe">Sem Classe</option>
                 <option value="Classe A (1º)">Classe A (1º)</option>
