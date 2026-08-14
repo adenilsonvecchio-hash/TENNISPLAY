@@ -159,7 +159,18 @@ export const AppShell: React.FC<AppShellProps> = ({
                 <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
               </button>
             ) : (
-              <div className="text-xs font-bold text-[#ccff00]">TennisPlay</div>
+              <div className="text-base font-logo font-black tracking-tight flex items-center">
+                <span className="text-white">TENNIS</span>
+                <span
+                  className="text-[#ccff00]"
+                  style={{
+                    WebkitTextStroke: '1.6px #0F172A',
+                    paintOrder: 'stroke fill',
+                  }}
+                >
+                  PLAY
+                </span>
+              </div>
             )}
 
             {/* Navegação Desktop (Visível em telas >= 768px) */}

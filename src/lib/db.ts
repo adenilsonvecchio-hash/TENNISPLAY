@@ -539,14 +539,60 @@ export const DbService = {
 
   async getGroupCourtConfig(groupId: string, _date: string): Promise<CourtConfig> {
     const db = requireDb();
-    const [{ data: courts, error: courtError }, { data: hours, error: hourError }] = await Promise.all([
+    let [{ data: courts, error: courtError }, { data: hours, error: hourError }] = await Promise.all([
       db.from('quadras').select('*').eq('grupo_id', groupId).eq('ativa', true).order('numero'),
       db.from('horarios').select('*').eq('grupo_id', groupId).eq('ativo', true).order('hora_inicio')
     ]);
     if (courtError) fail('Erro ao carregar quadras', courtError);
     if (hourError) fail('Erro ao carregar horários', hourError);
-    const slots: TimeSlot[] = (hours || []).map((h: any) => ({ id: h.id, inicio: timeText(h.hora_inicio), fim: timeText(h.hora_fim), label: `${timeText(h.hora_inicio)} às ${timeText(h.hora_fim)}` }));
-    return { grupo_id: groupId, data: _date, qtd_quadras: courts?.length || 0, horarios: slots, prazo_cancelamento_horas: 2 };
+
+    // Se o grupo ainda não tiver quadras ou horários gravados na base, garante os 4 padrões e horários
+    if (!courts || courts.length === 0 || !hours || hours.length === 0) {
+      try {
+        if (!courts || courts.length === 0) {
+          const defaultCourts = Array.from({ length: 4 }, (_, i) => ({
+            grupo_id: groupId,
+            nome: `Quadra ${i + 1}`,
+            numero: i + 1,
+            ativa: true
+          }));
+          await db.from('quadras').insert(defaultCourts);
+        }
+        if (!hours || hours.length === 0) {
+          const defaultHours = DEFAULT_HORARIOS_PADRAO.map((h) => ({
+            grupo_id: groupId,
+            hora_inicio: h.inicio,
+            hora_fim: h.fim,
+            turno: Number(h.inicio.slice(0, 2)) < 12 ? 'manha' : Number(h.inicio.slice(0, 2)) < 18 ? 'tarde' : 'noite',
+            ativo: true
+          }));
+          await db.from('horarios').insert(defaultHours);
+        }
+
+        const [reCourts, reHours] = await Promise.all([
+          db.from('quadras').select('*').eq('grupo_id', groupId).eq('ativa', true).order('numero'),
+          db.from('horarios').select('*').eq('grupo_id', groupId).eq('ativo', true).order('hora_inicio')
+        ]);
+        if (reCourts.data && reCourts.data.length > 0) courts = reCourts.data;
+        if (reHours.data && reHours.data.length > 0) hours = reHours.data;
+      } catch (err) {
+        console.warn('Auto-criação de quadras/horários padrão:', err);
+      }
+    }
+
+    const slots: TimeSlot[] = (hours || []).map((h: any) => ({
+      id: h.id,
+      inicio: timeText(h.hora_inicio),
+      fim: timeText(h.hora_fim),
+      label: `${timeText(h.hora_inicio)} às ${timeText(h.hora_fim)}`
+    }));
+    return {
+      grupo_id: groupId,
+      data: _date,
+      qtd_quadras: courts?.length || 4,
+      horarios: slots.length > 0 ? slots : DEFAULT_HORARIOS_PADRAO,
+      prazo_cancelamento_horas: 2
+    };
   },
 
   async saveGroupCourtConfig(groupId: string, date: string, quantity: number, slots: TimeSlot[] = DEFAULT_HORARIOS_PADRAO, deadline = 2): Promise<CourtConfig> {
@@ -587,22 +633,177 @@ export const DbService = {
     return Promise.all((data || []).map(mapReservation));
   },
 
-  async createBooking(input: { grupo_id: string; data: string; horario_id: string; horario_label: string; quadra_numero: number; jogador_id: string; jogador_nome: string; jogador_classe?: PlayerClass }): Promise<Reserva> {
+  async createBooking(input: {
+    grupo_id: string;
+    data: string;
+    horario_id: string;
+    horario_label: string;
+    quadra_numero: number;
+    jogador_id?: string;
+    jogador_nome?: string;
+    jogador_classe?: PlayerClass;
+  }): Promise<Reserva> {
     const db = requireDb();
-    const { data: court, error: courtError } = await db.from('quadras').select('id').eq('grupo_id', input.grupo_id).eq('numero', input.quadra_numero).eq('ativa', true).single();
-    if (courtError) fail('Quadra indisponível', courtError);
-    const { data: hour, error: hourError } = await db.from('horarios').select('id').eq('id', input.horario_id).eq('grupo_id', input.grupo_id).eq('ativo', true).single();
-    if (hourError) fail('Horário indisponível', hourError);
-    const { data, error } = await db.from('reservas').insert({
-      grupo_id: input.grupo_id, quadra_id: court.id, horario_id: hour.id, data: input.data,
-      criador_id: input.jogador_id, nome_convidado: 'Adversário a definir', status: 'confirmada'
-    }).select('*, quadra:quadras(numero), horario:horarios(hora_inicio,hora_fim), criador:usuarios(nome)').single();
-    if (error || !data) {
-      if ((error as any)?.code === '23505' || String((error as any)?.message).includes('unique constraint') || String((error as any)?.message).includes('duplicate key')) {
+
+    // 1. Validar a sessão atual no Supabase Auth
+    const {
+      data: { user },
+      error: userError
+    } = await db.auth.getUser();
+
+    if (userError || !user) {
+      console.error('[Supabase Auth User Error]:', userError);
+      throw new Error('Você precisa entrar novamente para reservar um horário.');
+    }
+
+    // 2. Localizar o membro do grupo usando o usuário autenticado
+    const { data: membro, error: membroError } = await db
+      .from('membros_grupo')
+      .select('id, grupo_id, usuario_id, status, classe')
+      .eq('usuario_id', user.id)
+      .eq('grupo_id', input.grupo_id)
+      .eq('status', 'ativo')
+      .maybeSingle();
+
+    if (membroError || !membro) {
+      console.error('[Supabase Membro Error]:', membroError);
+      throw new Error('Seu cadastro não está vinculado a um grupo ativo.');
+    }
+
+    // 3. Validar e obter quadra_id real (UUID)
+    let { data: court, error: courtError } = await db
+      .from('quadras')
+      .select('id')
+      .eq('grupo_id', input.grupo_id)
+      .eq('numero', input.quadra_numero)
+      .eq('ativa', true)
+      .maybeSingle();
+
+    if (!court) {
+      const { data: newCourt, error: createCourtErr } = await db
+        .from('quadras')
+        .insert({
+          grupo_id: input.grupo_id,
+          numero: input.quadra_numero,
+          nome: `Quadra ${input.quadra_numero}`,
+          ativa: true
+        })
+        .select('id')
+        .single();
+
+      if (createCourtErr || !newCourt) {
+        console.error('[Supabase Quadra Create Error]:', courtError || createCourtErr);
+        throw new Error('Não foi possível identificar a quadra selecionada.');
+      }
+      court = newCourt;
+    }
+
+    // 4. Validar e obter horario_id real (UUID)
+    let hour: { id: string } | null = null;
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.horario_id);
+
+    if (isUuid) {
+      const { data: foundHour } = await db
+        .from('horarios')
+        .select('id')
+        .eq('id', input.horario_id)
+        .eq('grupo_id', input.grupo_id)
+        .eq('ativo', true)
+        .maybeSingle();
+
+      if (foundHour) {
+        hour = foundHour;
+      }
+    }
+
+    if (!hour) {
+      let inicio = '';
+      let fim = '';
+      if (input.horario_label && input.horario_label.includes('às')) {
+        const parts = input.horario_label.split('às').map((s) => s.trim());
+        inicio = parts[0];
+        fim = parts[1];
+      }
+
+      if (inicio && fim) {
+        const { data: foundByTime } = await db
+          .from('horarios')
+          .select('id')
+          .eq('grupo_id', input.grupo_id)
+          .eq('hora_inicio', inicio)
+          .eq('hora_fim', fim)
+          .maybeSingle();
+
+        if (foundByTime) {
+          hour = foundByTime;
+        } else {
+          const hourNum = Number(inicio.slice(0, 2)) || 8;
+          const { data: newHour, error: newHourErr } = await db
+            .from('horarios')
+            .insert({
+              grupo_id: input.grupo_id,
+              hora_inicio: inicio,
+              hora_fim: fim,
+              turno: hourNum < 12 ? 'manha' : hourNum < 18 ? 'tarde' : 'noite',
+              ativo: true
+            })
+            .select('id')
+            .single();
+
+          if (newHour) {
+            hour = newHour;
+          } else {
+            console.error('[Supabase Horario Create Error]:', newHourErr);
+          }
+        }
+      }
+    }
+
+    if (!hour) {
+      throw new Error('Não foi possível identificar todos os dados da reserva.');
+    }
+
+    // 5. Validar dados da reserva e montar payload
+    const payload = {
+      grupo_id: input.grupo_id,
+      quadra_id: court.id,
+      horario_id: hour.id,
+      data: input.data,
+      criador_id: user.id,
+      criador_classe: classToDb(membro.classe || input.jogador_classe) || null,
+      nome_convidado: 'Adversário a definir',
+      status: 'confirmada'
+    };
+
+    console.log('Dados da reserva:', payload);
+
+    // 6. Gravar no Supabase
+    const { data, error: reservaError } = await db
+      .from('reservas')
+      .insert(payload)
+      .select('*, quadra:quadras(numero), horario:horarios(hora_inicio,hora_fim), criador:usuarios(nome)')
+      .single();
+
+    if (reservaError || !data) {
+      console.error('Erro ao criar reserva:', reservaError);
+      const msg = String((reservaError as any)?.message || '');
+      const code = String((reservaError as any)?.code || '');
+
+      if (code === '23505' || msg.includes('unique constraint') || msg.includes('duplicate key') || msg.includes('reservation_no_double_booking')) {
         throw new Error('Este horário acabou de ser reservado por outro jogador. Escolha outro horário.');
       }
-      fail('Erro ao criar reserva', error || 'Resposta vazia');
+
+      if (code === '42501' || msg.includes('row-level security') || msg.includes('permission')) {
+        throw new Error('Você não tem permissão para reservar neste grupo.');
+      }
+
+      if (msg.includes('JWT') || msg.includes('session') || msg.includes('token') || msg.includes('Auth session missing')) {
+        throw new Error('Sua sessão expirou. Entre novamente.');
+      }
+
+      throw new Error('Não foi possível concluir a reserva. Tente novamente.');
     }
+
     return mapReservation(data);
   },
 

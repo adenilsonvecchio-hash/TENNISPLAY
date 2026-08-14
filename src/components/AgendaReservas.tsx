@@ -65,6 +65,8 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
     slot: TimeSlot;
     quadra: number;
   } | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [modalError, setModalError] = useState<string | null>(null);
 
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
@@ -183,7 +185,10 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
 
   // Confirm Reservation
   const handleConfirmReservation = async () => {
-    if (!bookingTarget) return;
+    if (!bookingTarget || isSubmitting) return;
+
+    setIsSubmitting(true);
+    setModalError(null);
 
     try {
       await DbService.createBooking({
@@ -197,19 +202,23 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
         jogador_classe: 'Sem Classe'
       });
 
+      const confirmedSlot = bookingTarget;
       setBookingTarget(null);
+      setModalError(null);
+      toast.success('Reserva realizada com sucesso!');
       setFeedback({
         type: 'success',
-        message: `Reserva confirmada na Quadra ${bookingTarget.quadra} (${bookingTarget.slot.label})!`
+        message: `Reserva realizada com sucesso na Quadra ${confirmedSlot.quadra} (${confirmedSlot.slot.label})!`
       });
       setTimeout(() => setFeedback(null), 4000);
       await refreshData();
     } catch (err: any) {
-      setFeedback({
-        type: 'error',
-        message: err.message || 'Horário indisponível.'
-      });
-      setTimeout(() => setFeedback(null), 4000);
+      const errorMsg = err.message || 'Não foi possível concluir a reserva. Tente novamente.';
+      console.error('Erro ao criar reserva:', err);
+      setModalError(errorMsg);
+      toast.error(errorMsg);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -724,7 +733,10 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
 
                       <div className="pt-2 border-t border-slate-200 flex items-center justify-end">
                         <button
-                          onClick={() => setBookingTarget({ slot, quadra: quadraNum })}
+                          onClick={() => {
+                            setModalError(null);
+                            setBookingTarget({ slot, quadra: quadraNum });
+                          }}
                           className="w-full py-2.5 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-white font-extrabold text-xs shadow-md transition-all active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer"
                         >
                           <span>Reservar</span>
@@ -757,6 +769,14 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
               </div>
             </div>
 
+            {/* Alerta de erro da tentativa de reserva dentro do modal */}
+            {modalError && (
+              <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold flex items-start gap-2.5 animate-in fade-in">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <span>{modalError}</span>
+              </div>
+            )}
+
             <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2 text-sm">
               <div className="flex items-center justify-between">
                 <span className="text-slate-500 font-semibold">Quadra:</span>
@@ -778,16 +798,32 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
 
             <div className="flex items-center gap-3 pt-2">
               <button
-                onClick={() => setBookingTarget(null)}
-                className="flex-1 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
+                type="button"
+                disabled={isSubmitting}
+                onClick={() => {
+                  if (!isSubmitting) {
+                    setBookingTarget(null);
+                    setModalError(null);
+                  }
+                }}
+                className="flex-1 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer disabled:opacity-50 transition-all"
               >
                 Cancelar
               </button>
               <button
+                type="button"
+                disabled={isSubmitting}
                 onClick={handleConfirmReservation}
-                className="flex-1 py-3 rounded-2xl bg-[#0F172A] hover:bg-slate-800 text-white font-extrabold text-xs shadow-md transition-all active:scale-95 cursor-pointer"
+                className="flex-1 py-3 rounded-2xl bg-[#0F172A] hover:bg-slate-800 text-white font-extrabold text-xs shadow-md transition-all active:scale-95 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
-                Confirmar Reserva
+                {isSubmitting ? (
+                  <>
+                    <span className="inline-block w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span>Reservando...</span>
+                  </>
+                ) : (
+                  <span>Confirmar Reserva</span>
+                )}
               </button>
             </div>
           </div>
