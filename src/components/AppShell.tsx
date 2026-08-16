@@ -239,19 +239,9 @@ export const AppShell: React.FC<AppShellProps> = ({
             </nav>
           </div>
 
-          {/* LADO DIREITO: Ícones (Jogadores, Notificações, Avatar) */}
+          {/* LADO DIREITO: Ícones (Notificações, Avatar) */}
           <div className="flex items-center gap-1 sm:gap-2">
             
-            {/* Ícone de Jogadores/Membros */}
-            <button
-              onClick={() => setActiveTab('members')}
-              aria-label="Membros e Jogadores"
-              title="Jogadores do grupo"
-              className="w-10 h-10 rounded-xl flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
-            >
-              <Users className="w-5 h-5" />
-            </button>
-
             {/* Ícone de Notificações com contador */}
             <NotificationCenter session={session} />
 
@@ -367,73 +357,58 @@ export const AppShell: React.FC<AppShellProps> = ({
         className="fixed bottom-0 left-0 right-0 z-30 bg-[#0F172A] text-white border-t border-slate-800 shadow-2xl h-16 flex items-center justify-around px-2 select-none md:hidden"
         style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
       >
-        <div className="w-full mx-auto flex items-center justify-around">
+        <div className="w-full max-w-md mx-auto grid grid-cols-4 items-center">
           
           {/* 1. INÍCIO */}
           <button
+            type="button"
             onClick={() => setActiveTab('overview')}
             aria-label="Início"
-            className={`flex flex-col items-center justify-center min-w-[56px] min-h-[44px] px-2 py-1 transition-colors cursor-pointer ${
+            className={`flex flex-col items-center justify-center min-h-[48px] py-1 transition-colors cursor-pointer ${
               activeTab === 'overview' ? 'text-[#ccff00] font-bold' : 'text-slate-400 hover:text-white'
             }`}
           >
             <Home className="w-5 h-5 mb-0.5" />
-            <span className="text-[10px] tracking-tight">Início</span>
+            <span className="text-[11px] tracking-tight font-bold">Início</span>
           </button>
 
           {/* 2. AGENDA */}
           <button
+            type="button"
             onClick={() => setActiveTab('agenda')}
             aria-label="Agenda"
-            className={`flex flex-col items-center justify-center min-w-[56px] min-h-[44px] px-2 py-1 transition-colors cursor-pointer ${
+            className={`flex flex-col items-center justify-center min-h-[48px] py-1 transition-colors cursor-pointer ${
               activeTab === 'agenda' ? 'text-[#ccff00] font-bold' : 'text-slate-400 hover:text-white'
             }`}
           >
             <CalendarDays className="w-5 h-5 mb-0.5" />
-            <span className="text-[10px] tracking-tight">Agenda</span>
+            <span className="text-[11px] tracking-tight font-bold">Agenda</span>
           </button>
 
           {/* 3. RESERVAS */}
           <button
+            type="button"
             onClick={() => setActiveTab('historico')}
             aria-label="Reservas"
-            className={`flex flex-col items-center justify-center min-w-[56px] min-h-[44px] px-2 py-1 transition-colors cursor-pointer ${
+            className={`flex flex-col items-center justify-center min-h-[48px] py-1 transition-colors cursor-pointer ${
               activeTab === 'historico' ? 'text-[#ccff00] font-bold' : 'text-slate-400 hover:text-white'
             }`}
           >
             <CalendarCheck className="w-5 h-5 mb-0.5" />
-            <span className="text-[10px] tracking-tight">Reservas</span>
+            <span className="text-[11px] tracking-tight font-bold">Reservas</span>
           </button>
 
-          {/* 4. NOTIFICAÇÕES */}
+          {/* 4. PERFIL */}
           <button
-            onClick={() => setShowMobileNotifications(true)}
-            aria-label="Notificações"
-            className={`relative flex flex-col items-center justify-center min-w-[56px] min-h-[44px] px-2 py-1 transition-colors cursor-pointer ${
-              showMobileNotifications ? 'text-[#ccff00] font-bold' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <div className="relative">
-              <Bell className="w-5 h-5 mb-0.5" />
-              {unreadCount > 0 && (
-                <span className="absolute -top-1 -right-2 w-4 h-4 bg-rose-600 text-white rounded-full text-[9px] font-black flex items-center justify-center border-2 border-[#0F172A]">
-                  {unreadCount}
-                </span>
-              )}
-            </div>
-            <span className="text-[10px] tracking-tight">Notificações</span>
-          </button>
-
-          {/* 5. PERFIL */}
-          <button
+            type="button"
             onClick={() => setActiveTab('profile')}
             aria-label="Perfil"
-            className={`flex flex-col items-center justify-center min-w-[56px] min-h-[44px] px-2 py-1 transition-colors cursor-pointer ${
+            className={`flex flex-col items-center justify-center min-h-[48px] py-1 transition-colors cursor-pointer ${
               activeTab === 'profile' ? 'text-[#ccff00] font-bold' : 'text-slate-400 hover:text-white'
             }`}
           >
             <User className="w-5 h-5 mb-0.5" />
-            <span className="text-[10px] tracking-tight">Perfil</span>
+            <span className="text-[11px] tracking-tight font-bold">Perfil</span>
           </button>
 
         </div>

@@ -71,11 +71,21 @@ export interface TimeSlot {
   label: string;
 }
 
+export interface Quadra {
+  id: string;
+  grupo_id: string;
+  numero: number;
+  nome: string;
+  ativa: boolean;
+  dias_funcionamento?: number[]; // [0..6] onde 0=domingo, 4=quinta, etc.
+}
+
 export interface CourtConfig {
   id?: string;
   grupo_id: string;
   data: string; // YYYY-MM-DD
   qtd_quadras: number;
+  quadras?: Quadra[]; // Lista real das quadras ativas do grupo
   horarios: TimeSlot[];
   prazo_cancelamento_horas: number;
 }
@@ -86,6 +96,7 @@ export interface Reserva {
   data: string; // YYYY-MM-DD
   horario_id: string;
   horario_label: string;
+  quadra_id?: string;
   quadra_numero: number;
   jogador_id: string;
   jogador_nome: string;
@@ -148,6 +159,20 @@ export interface AuthSession {
   activeRole: PerfilRole | null;
   membros: MembroGrupo[];
 }
+
+/**
+ * Regra de Segurança Centralizada:
+ * Somente o PROPRIETÁRIO do grupo pode definir ou alterar a classe de qualquer jogador.
+ * Administradores e jogadores comuns não possuem permissão para alterar classes.
+ */
+export function podeAlterarClasse(session: AuthSession | null): boolean {
+  if (!session || !session.user || !session.activeGroup) return false;
+  const currentMember = session.membros.find(
+    (m) => m.usuario_id === session.user?.id && m.grupo_id === session.activeGroup?.id
+  );
+  return currentMember?.perfil === 'PROPRIETARIO' && currentMember?.status === 'ATIVO';
+}
+
 
 export interface BrazilianState {
   sigla: string;

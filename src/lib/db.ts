@@ -1,9 +1,10 @@
 import {
   AuthSession, CadastroJogadorData, CadastroProprietarioData, CourtConfig, DEFAULT_HORARIOS_PADRAO,
-  Grupo, MemberStatus, MembroGrupo, Notificacao, PerfilRole, PlayerClass, DEFAULT_PLAYER_CLASSES, Reserva, TimeSlot, Usuario
+  Grupo, MemberStatus, MembroGrupo, Notificacao, PerfilRole, PlayerClass, DEFAULT_PLAYER_CLASSES, Quadra, Reserva, TimeSlot, Usuario
 } from '../types';
 import { getSupabaseClient } from './supabase';
 import { normalizeLocation } from './location';
+import { getDayOfWeek, getTodayCivilDate, formatCivilDate, isPastCivilDate, isPastTimeSlot } from './dateUtils';
 
 const requireDb = () => {
   const db = getSupabaseClient();
@@ -258,10 +259,17 @@ async function mapReservation(row: any): Promise<Reserva> {
   const start = row.horario?.hora_inicio ? timeText(row.horario.hora_inicio) : '';
   const end = row.horario?.hora_fim ? timeText(row.horario.hora_fim) : '';
   return {
-    id: row.id, grupo_id: row.grupo_id, data: row.data, horario_id: row.horario_id,
-    horario_label: start && end ? `${start} às ${end}` : '', quadra_numero: row.quadra?.numero || 0,
-    jogador_id: row.criador_id, jogador_nome: row.criador?.nome || '',
-    jogador_classe: classFromDb(row.criador_classe), created_at: row.criado_em
+    id: row.id,
+    grupo_id: row.grupo_id,
+    data: row.data,
+    horario_id: row.horario_id,
+    horario_label: start && end ? `${start} às ${end}` : '',
+    quadra_id: row.quadra_id || row.quadra?.id,
+    quadra_numero: row.quadra?.numero || row.quadra_numero || 0,
+    jogador_id: row.criador_id,
+    jogador_nome: row.criador?.nome || '',
+    jogador_classe: classFromDb(row.criador_classe),
+    created_at: row.criado_em
   };
 }
 
@@ -431,14 +439,36 @@ export const DbService = {
     return this.getGroupMembers(current.grupo_id);
   },
 
-  async updateMemberClass(memberId: string, value: PlayerClass): Promise<MembroGrupo[]> {
+  async updateMemberClass(memberId: string, value: PlayerClass, groupId?: string): Promise<MembroGrupo[]> {
     const db = requireDb();
-    const { data: current, error: findError } = await db.from('membros_grupo').select('grupo_id').eq('id', memberId).single();
-    if (findError) fail('Membro não encontrado', findError);
-    const { error } = await db.from('membros_grupo').update({ classe: classToDb(value) }).eq('id', memberId);
-    if (error) fail('Erro ao atualizar classe', error);
-    return this.getGroupMembers(current.grupo_id);
+    let targetGroupId = groupId;
+    if (!targetGroupId) {
+      const { data: current, error: findError } = await db
+        .from('membros_grupo')
+        .select('grupo_id')
+        .eq('id', memberId)
+        .single();
+      if (findError || !current) fail('Membro não encontrado', findError);
+      targetGroupId = current.grupo_id;
+    }
+
+    const dbClass = classToDb(value);
+
+    // Invocar exclusivamente a RPC segura no Supabase
+    const { error: rpcErr } = await db.rpc('alterar_classe_jogador', {
+      p_membro_id: memberId,
+      p_grupo_id: targetGroupId,
+      p_nova_classe: dbClass || 'Sem Classe'
+    });
+
+    if (rpcErr) {
+      console.error('[Supabase RPC alterar_classe_jogador Error]:', rpcErr.code, rpcErr.message, rpcErr);
+      fail(rpcErr.message || 'Erro ao alterar classe do jogador. Apenas o proprietário tem permissão.', rpcErr);
+    }
+
+    return this.getGroupMembers(targetGroupId!);
   },
+
 
   async approveMemberWithClass(memberId: string, value: PlayerClass): Promise<MembroGrupo[]> {
     const db = requireDb();
@@ -580,6 +610,15 @@ export const DbService = {
       }
     }
 
+    const courtList: Quadra[] = (courts || []).map((c: any) => ({
+      id: c.id,
+      grupo_id: c.grupo_id,
+      numero: c.numero,
+      nome: c.nome || `Quadra ${c.numero}`,
+      ativa: c.ativa !== false,
+      dias_funcionamento: c.dias_funcionamento || [0, 1, 2, 3, 4, 5, 6]
+    }));
+
     const slots: TimeSlot[] = (hours || []).map((h: any) => ({
       id: h.id,
       inicio: timeText(h.hora_inicio),
@@ -589,7 +628,13 @@ export const DbService = {
     return {
       grupo_id: groupId,
       data: _date,
-      qtd_quadras: courts?.length || 4,
+      qtd_quadras: courtList.length > 0 ? courtList.length : 4,
+      quadras: courtList.length > 0 ? courtList : [
+        { id: 'q1', grupo_id: groupId, numero: 1, nome: 'Quadra 1', ativa: true, dias_funcionamento: [0, 1, 2, 3, 4, 5, 6] },
+        { id: 'q2', grupo_id: groupId, numero: 2, nome: 'Quadra 2', ativa: true, dias_funcionamento: [0, 1, 2, 3, 4, 5, 6] },
+        { id: 'q3', grupo_id: groupId, numero: 3, nome: 'Quadra 3', ativa: true, dias_funcionamento: [0, 1, 2, 3, 4, 5, 6] },
+        { id: 'q4', grupo_id: groupId, numero: 4, nome: 'Quadra 4', ativa: true, dias_funcionamento: [0, 1, 2, 3, 4, 5, 6] }
+      ],
       horarios: slots.length > 0 ? slots : DEFAULT_HORARIOS_PADRAO,
       prazo_cancelamento_horas: 2
     };
@@ -628,8 +673,16 @@ export const DbService = {
   },
 
   async getBookingsForDate(groupId: string, date: string): Promise<Reserva[]> {
-    const { data, error } = await requireDb().from('reservas').select('*, quadra:quadras(numero), horario:horarios(hora_inicio,hora_fim), criador:usuarios(nome)').eq('grupo_id', groupId).eq('data', date).in('status', ['aguardando', 'confirmada']);
-    if (error) fail('Erro ao sincronizar reservas', error);
+    const { data, error } = await requireDb()
+      .from('reservas')
+      .select('*, quadra:quadras(id, numero, nome), horario:horarios(id, hora_inicio, hora_fim), criador:usuarios!reservas_criador_id_fkey(id, nome), adversario:usuarios!reservas_adversario_id_fkey(id, nome)')
+      .eq('grupo_id', groupId)
+      .eq('data', date)
+      .in('status', ['aguardando', 'confirmada']);
+    if (error) {
+      console.error('Erro ao sincronizar reservas:', error);
+      fail('Erro ao sincronizar reservas', error);
+    }
     return Promise.all((data || []).map(mapReservation));
   },
 
@@ -639,6 +692,7 @@ export const DbService = {
     horario_id: string;
     horario_label: string;
     quadra_numero: number;
+    quadra_id?: string;
     jogador_id?: string;
     jogador_nome?: string;
     jogador_classe?: PlayerClass;
@@ -647,58 +701,242 @@ export const DbService = {
 
     // 1. Validar a sessão atual no Supabase Auth
     const {
-      data: { user },
-      error: userError
-    } = await db.auth.getUser();
+      data: { session },
+      error: sessionError
+    } = await db.auth.getSession();
 
-    if (userError || !user) {
-      console.error('[Supabase Auth User Error]:', userError);
-      throw new Error('Você precisa entrar novamente para reservar um horário.');
+    console.log("AUTH DEBUG", {
+      possuiSessao: !!session,
+      userId: session?.user?.id
+    });
+
+    if (sessionError || !session?.user) {
+      console.error('[Supabase Auth Session Error]:', sessionError);
+      throw new Error('Sua sessão expirou. Entre novamente.');
     }
 
-    // 2. Localizar o membro do grupo usando o usuário autenticado
+    const user = session.user;
+
+    // Extrair horários inicial e final do label caso disponíveis
+    let inicio = '';
+    let fim = '';
+    if (input.horario_label && input.horario_label.includes('às')) {
+      const parts = input.horario_label.split('às').map((s) => s.trim());
+      inicio = parts[0] || '';
+      fim = parts[1] || '';
+    }
+
+    // Regra de Negócio: Bloquear reservas em datas ou horários passados
+    const todayStr = getTodayCivilDate();
+    const dataNormalizada = formatCivilDate(input.data);
+    if (dataNormalizada < todayStr) {
+      throw new Error('Não é possível reservar horários em datas anteriores.');
+    }
+    if (dataNormalizada === todayStr && inicio && isPastTimeSlot(dataNormalizada, inicio)) {
+      throw new Error('Este horário já começou e não pode mais ser reservado.');
+    }
+
+    const isCourtUuid = !!(input.quadra_id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.quadra_id));
+
+    // Log de diagnóstico obrigatório
+    console.log("CREATE BOOKING PARAMS:", {
+      grupoId: input.grupo_id,
+      quadraId: input.quadra_id,
+      quadraNumero: input.quadra_numero,
+      data: input.data,
+      horarioId: input.horario_id,
+      jogadorId: user.id
+    });
+
+    // 2. Tentar via RPC public.criar_reserva (Atômica, Concorrente e Segura)
+    console.log("CREATE BOOKING: tentando RPC");
+    let isRpcUnavailable = false;
+
+    try {
+      let rpcData: any = null;
+      let rpcError: any = null;
+
+      // Tentativa 1: RPC com assinatura canônica (incluindo p_quadra_id)
+      const rpcResult1 = await db.rpc('criar_reserva', {
+        p_grupo_id: input.grupo_id,
+        p_data: input.data,
+        p_quadra_numero: input.quadra_numero,
+        p_horario_id: input.horario_id,
+        p_horario_inicio: inicio ? (inicio.length === 5 ? `${inicio}:00` : inicio) : null,
+        p_horario_fim: fim ? (fim.length === 5 ? `${fim}:00` : fim) : null,
+        p_quadra_id: isCourtUuid ? input.quadra_id : null
+      });
+
+      rpcData = rpcResult1.data;
+      rpcError = rpcResult1.error;
+
+      // Se a assinatura com p_quadra_id não existir no catálogo remoto (código PGRST202 ou 42883), tenta a assinatura legada de 6 parâmetros
+      if (rpcError && (rpcError.code === 'PGRST202' || rpcError.code === '42883' || String(rpcError.message).includes('Could not find the function'))) {
+        console.warn('RPC com p_quadra_id não encontrada no schema cache remoto. Tentando assinatura legada...');
+        const rpcResult2 = await db.rpc('criar_reserva', {
+          p_grupo_id: input.grupo_id,
+          p_data: input.data,
+          p_quadra_numero: input.quadra_numero,
+          p_horario_id: input.horario_id,
+          p_horario_inicio: inicio ? (inicio.length === 5 ? `${inicio}:00` : inicio) : null,
+          p_horario_fim: fim ? (fim.length === 5 ? `${fim}:00` : fim) : null
+        });
+        if (rpcResult2.data) {
+          rpcData = rpcResult2.data;
+          rpcError = null;
+        } else if (rpcResult2.error) {
+          rpcError = rpcResult2.error;
+        }
+      }
+
+      if (!rpcError && rpcData) {
+        console.log("CREATE BOOKING: sucesso via RPC", rpcData);
+        return {
+          id: rpcData.id,
+          grupo_id: rpcData.grupo_id,
+          data: rpcData.data,
+          horario_id: rpcData.horario_id,
+          horario_label: rpcData.horario_label || input.horario_label,
+          quadra_id: rpcData.quadra_id || input.quadra_id,
+          quadra_numero: rpcData.quadra_numero || input.quadra_numero,
+          jogador_id: rpcData.jogador_id || user.id,
+          jogador_nome: rpcData.jogador_nome || input.jogador_nome || user.user_metadata?.nome || 'Jogador',
+          jogador_classe: classFromDb(rpcData.jogador_classe),
+          created_at: rpcData.created_at || new Date().toISOString()
+        };
+      }
+
+      if (rpcError) {
+        console.log("CREATE BOOKING - resultado da RPC (com erro):", rpcError);
+        const msg = String(rpcError.message || '');
+        const code = String(rpcError.code || '');
+
+        // Detectar se a RPC não está provisionada no banco remoto
+        if (code === '42883' || code === 'PGRST202' || msg.includes('function public.criar_reserva') || msg.includes('Could not find the function')) {
+          console.warn('RPC public.criar_reserva não provisionada no Supabase remoto. Acionando fallback direto...');
+          isRpcUnavailable = true;
+        } else {
+          // Erros de negócio da RPC
+          console.error("CREATE BOOKING - ERRO ORIGINAL:", rpcError);
+          if (code === '23505' || msg.includes('acabou de ser reservado') || msg.includes('unique constraint') || msg.includes('duplicate key')) {
+            throw new Error('Este horário acabou de ser reservado por outro jogador. Escolha outro horário.');
+          }
+          if (msg.includes('Sua sessão expirou') || msg.includes('JWT') || msg.includes('session')) {
+            throw new Error('Sua sessão expirou. Entre novamente.');
+          }
+          if (msg.includes('não está vinculado a este grupo')) {
+            throw new Error('Seu cadastro ainda não está vinculado a este grupo.');
+          }
+          if (msg.includes('aguardando aprovação') || msg.includes('pendente')) {
+            throw new Error('Seu acesso ao grupo ainda está aguardando aprovação.');
+          }
+          if (msg.includes('classe ainda não foi definida')) {
+            throw new Error('Sua classe ainda não foi definida pelo proprietário.');
+          }
+          if (code === '42501' || msg.includes('permission') || msg.includes('policy')) {
+            throw new Error('Você não tem permissão para reservar neste grupo.');
+          }
+          if (msg === 'Failed to fetch' || msg.includes('Failed to fetch')) {
+            throw new Error('Não foi possível conectar ao servidor. Verifique sua internet.');
+          }
+          throw new Error(msg || 'Não foi possível concluir a reserva. Tente novamente.');
+        }
+      }
+    } catch (rpcErr: any) {
+      const msg = String(rpcErr?.message || '');
+      const code = String(rpcErr?.code || '');
+      if (
+        code === '42883' ||
+        code === 'PGRST202' ||
+        msg.includes('function public.criar_reserva') ||
+        msg.includes('Could not find the function')
+      ) {
+        isRpcUnavailable = true;
+      } else {
+        throw rpcErr;
+      }
+    }
+
+    // 3. Fallback Direto Seguro no Supabase Client
+    console.log("CREATE BOOKING: executando fallback direto");
+
+    // 3.1 Localizar o membro do grupo usando o usuário autenticado
     const { data: membro, error: membroError } = await db
       .from('membros_grupo')
       .select('id, grupo_id, usuario_id, status, classe')
       .eq('usuario_id', user.id)
       .eq('grupo_id', input.grupo_id)
-      .eq('status', 'ativo')
       .maybeSingle();
 
-    if (membroError || !membro) {
-      console.error('[Supabase Membro Error]:', membroError);
-      throw new Error('Seu cadastro não está vinculado a um grupo ativo.');
+    if (membroError) {
+      console.error('CREATE BOOKING - ERRO AO CONSULTAR MEMBRO:', {
+        message: membroError.message,
+        code: membroError.code,
+        details: membroError.details,
+        hint: membroError.hint,
+        usuario_id: user.id,
+        grupo_id: input.grupo_id
+      });
+      throw new Error(membroError.message || 'Não foi possível verificar seu cadastro.');
     }
 
-    // 3. Validar e obter quadra_id real (UUID)
-    let { data: court, error: courtError } = await db
-      .from('quadras')
-      .select('id')
-      .eq('grupo_id', input.grupo_id)
-      .eq('numero', input.quadra_numero)
-      .eq('ativa', true)
-      .maybeSingle();
+    if (!membro) {
+      throw new Error('Seu cadastro ainda não está vinculado a este grupo.');
+    }
+
+    if (membro.status === 'pendente') {
+      throw new Error('Seu acesso ao grupo ainda está aguardando aprovação.');
+    }
+
+    if (membro.status !== 'ativo') {
+      throw new Error('Seu cadastro não está ativo neste grupo.');
+    }
+
+    // 3.2 Validar e obter quadra_id real (UUID)
+    let court: { id: string; numero: number; ativa: boolean } | null = null;
+    if (isCourtUuid) {
+      const { data: foundCourt } = await db
+        .from('quadras')
+        .select('id, numero, ativa')
+        .eq('id', input.quadra_id)
+        .eq('grupo_id', input.grupo_id)
+        .maybeSingle();
+      if (foundCourt) court = foundCourt;
+    }
 
     if (!court) {
-      const { data: newCourt, error: createCourtErr } = await db
+      const { data: foundByNum } = await db
         .from('quadras')
-        .insert({
-          grupo_id: input.grupo_id,
-          numero: input.quadra_numero,
-          nome: `Quadra ${input.quadra_numero}`,
-          ativa: true
-        })
-        .select('id')
-        .single();
+        .select('id, numero, ativa')
+        .eq('grupo_id', input.grupo_id)
+        .eq('numero', input.quadra_numero)
+        .maybeSingle();
 
-      if (createCourtErr || !newCourt) {
-        console.error('[Supabase Quadra Create Error]:', courtError || createCourtErr);
-        throw new Error('Não foi possível identificar a quadra selecionada.');
+      if (foundByNum) {
+        court = foundByNum;
       }
-      court = newCourt;
     }
 
-    // 4. Validar e obter horario_id real (UUID)
+    if (!court) {
+      // Se não encontrou no banco, busca qualquer quadra ativa do grupo como referência
+      const { data: anyCourt } = await db
+        .from('quadras')
+        .select('id, numero, ativa')
+        .eq('grupo_id', input.grupo_id)
+        .limit(1)
+        .maybeSingle();
+      if (anyCourt) court = anyCourt;
+    }
+
+    if (!court) {
+      throw new Error(`A Quadra ${input.quadra_numero} não está cadastrada neste clube.`);
+    }
+
+    if (court.ativa === false) {
+      throw new Error(`A Quadra ${court.numero} está inativa no momento.`);
+    }
+
+    // 3.3 Validar e obter horario_id real (UUID)
     let hour: { id: string } | null = null;
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.horario_id);
 
@@ -716,76 +954,58 @@ export const DbService = {
       }
     }
 
-    if (!hour) {
-      let inicio = '';
-      let fim = '';
-      if (input.horario_label && input.horario_label.includes('às')) {
-        const parts = input.horario_label.split('às').map((s) => s.trim());
-        inicio = parts[0];
-        fim = parts[1];
-      }
+    if (!hour && inicio && fim) {
+      const inicioFormatted = inicio.length === 5 ? `${inicio}:00` : inicio;
+      const fimFormatted = fim.length === 5 ? `${fim}:00` : fim;
 
-      if (inicio && fim) {
-        const { data: foundByTime } = await db
-          .from('horarios')
-          .select('id')
-          .eq('grupo_id', input.grupo_id)
-          .eq('hora_inicio', inicio)
-          .eq('hora_fim', fim)
-          .maybeSingle();
+      const { data: foundByTime } = await db
+        .from('horarios')
+        .select('id')
+        .eq('grupo_id', input.grupo_id)
+        .or(`hora_inicio.eq.${inicio},hora_inicio.eq.${inicioFormatted}`)
+        .eq('ativo', true)
+        .maybeSingle();
 
-        if (foundByTime) {
-          hour = foundByTime;
-        } else {
-          const hourNum = Number(inicio.slice(0, 2)) || 8;
-          const { data: newHour, error: newHourErr } = await db
-            .from('horarios')
-            .insert({
-              grupo_id: input.grupo_id,
-              hora_inicio: inicio,
-              hora_fim: fim,
-              turno: hourNum < 12 ? 'manha' : hourNum < 18 ? 'tarde' : 'noite',
-              ativo: true
-            })
-            .select('id')
-            .single();
-
-          if (newHour) {
-            hour = newHour;
-          } else {
-            console.error('[Supabase Horario Create Error]:', newHourErr);
-          }
-        }
+      if (foundByTime) {
+        hour = foundByTime;
       }
     }
 
     if (!hour) {
-      throw new Error('Não foi possível identificar todos os dados da reserva.');
+      throw new Error('Este horário não está mais disponível.');
     }
 
-    // 5. Validar dados da reserva e montar payload
+    // 3.4 Validar dados da reserva e montar payload
+    if (dataNormalizada < todayStr) {
+      throw new Error('Não é possível reservar horários em datas anteriores.');
+    }
+    if (dataNormalizada === todayStr && inicio && isPastTimeSlot(dataNormalizada, inicio)) {
+      throw new Error('Este horário já começou e não pode mais ser reservado.');
+    }
+
     const payload = {
       grupo_id: input.grupo_id,
       quadra_id: court.id,
       horario_id: hour.id,
       data: input.data,
       criador_id: user.id,
-      criador_classe: classToDb(membro.classe || input.jogador_classe) || null,
+      criador_classe: classToDb(membro.classe) || null,
       nome_convidado: 'Adversário a definir',
       status: 'confirmada'
     };
 
-    console.log('Dados da reserva:', payload);
+    console.log("CREATE BOOKING: executando INSERT com payload:", payload);
 
-    // 6. Gravar no Supabase
+    // 3.5 Gravar no Supabase
     const { data, error: reservaError } = await db
       .from('reservas')
       .insert(payload)
-      .select('*, quadra:quadras(numero), horario:horarios(hora_inicio,hora_fim), criador:usuarios(nome)')
+      .select('*, quadra:quadras(id, numero, nome), horario:horarios(id, hora_inicio, hora_fim), criador:usuarios!reservas_criador_id_fkey(id, nome), adversario:usuarios!reservas_adversario_id_fkey(id, nome)')
       .single();
 
     if (reservaError || !data) {
-      console.error('Erro ao criar reserva:', reservaError);
+      console.error("CREATE BOOKING - ERRO ORIGINAL:", reservaError);
+
       const msg = String((reservaError as any)?.message || '');
       const code = String((reservaError as any)?.code || '');
 
@@ -793,27 +1013,168 @@ export const DbService = {
         throw new Error('Este horário acabou de ser reservado por outro jogador. Escolha outro horário.');
       }
 
-      if (code === '42501' || msg.includes('row-level security') || msg.includes('permission')) {
+      if (code === '42501' || msg.includes('row-level security') || msg.includes('permission') || msg.includes('policy')) {
         throw new Error('Você não tem permissão para reservar neste grupo.');
+      }
+
+      if (code === '23503' || msg.includes('foreign key constraint')) {
+        throw new Error('Erro de integridade de dados ao vincular quadra ou horário.');
       }
 
       if (msg.includes('JWT') || msg.includes('session') || msg.includes('token') || msg.includes('Auth session missing')) {
         throw new Error('Sua sessão expirou. Entre novamente.');
       }
 
-      throw new Error('Não foi possível concluir a reserva. Tente novamente.');
+      if (msg === 'Failed to fetch' || msg.includes('Failed to fetch')) {
+        throw new Error('Não foi possível conectar ao servidor. Verifique sua internet.');
+      }
+
+      throw new Error(msg || 'Não foi possível concluir a reserva. Tente novamente.');
     }
 
+    console.log("CREATE BOOKING: resultado do INSERT (sucesso):", data);
     return mapReservation(data);
   },
 
   async cancelBooking(id: string, userId: string, role: PerfilRole): Promise<void> {
     const db = requireDb();
-    const { data: booking, error: loadError } = await db.from('reservas').select('*').eq('id', id).single();
-    if (loadError) fail('Reserva não encontrada', loadError);
-    if (booking.criador_id !== userId && !['PROPRIETARIO', 'ADMINISTRADOR'].includes(role)) throw new Error('Você não pode cancelar esta reserva.');
-    const { error } = await db.from('reservas').update({ status: 'cancelada' }).eq('id', id);
-    if (error) fail('Erro ao cancelar reserva', error);
+
+    // 1. Log temporário de diagnóstico
+    console.log('CANCELAMENTO DEBUG', {
+      id,
+      userId,
+      role
+    });
+
+    // 2. Tentar via RPC public.cancelar_reserva se disponível no Supabase
+    console.log("CANCELAMENTO: tentando RPC cancelar_reserva");
+    try {
+      const { data: rpcData, error: rpcError } = await db.rpc('cancelar_reserva', {
+        p_reserva_id: id
+      });
+
+      console.log("CANCELAMENTO: resultado RPC", {
+        data: rpcData,
+        error: rpcError
+      });
+
+      if (!rpcError) {
+        // Confirmar no banco se a reserva foi realmente alterada para cancelada
+        const { data: checkReserva } = await db
+          .from('reservas')
+          .select('id, status, cancelado_por, cancelado_em')
+          .eq('id', id)
+          .maybeSingle();
+
+        if (checkReserva && checkReserva.status === 'cancelada') {
+          console.log("CANCELAMENTO: confirmado via RPC e verificação de banco", checkReserva);
+          return;
+        }
+      }
+
+      if (rpcError) {
+        const msg = String(rpcError.message || '');
+        const code = String(rpcError.code || '');
+
+        if (code === '42883' || code === 'PGRST202' || msg.includes('function public.cancelar_reserva') || msg.includes('Could not find the function')) {
+          console.log("RPC cancelar_reserva NÃO EXISTE no banco remoto.");
+        } else {
+          console.error('ERRO CANCELAR RESERVA (RPC):', rpcError);
+          if (msg.includes('permissão') || msg.includes('permission') || code === '42501') {
+            throw new Error('Você não tem permissão para cancelar esta reserva.');
+          }
+          if (msg.includes('Sua sessão expirou') || msg.includes('JWT') || msg.includes('session')) {
+            throw new Error('Sua sessão expirou. Entre novamente.');
+          }
+          throw new Error(msg || 'Não foi possível cancelar esta reserva.');
+        }
+      }
+    } catch (rpcErr: any) {
+      const msg = String(rpcErr?.message || '');
+      const code = String(rpcErr?.code || '');
+      if (code === '42883' || code === 'PGRST202' || msg.includes('function public.cancelar_reserva') || msg.includes('Could not find the function')) {
+        console.log("RPC cancelar_reserva NÃO EXISTE no banco remoto.");
+      } else {
+        throw rpcErr;
+      }
+    }
+
+    // 3. Fallback: Consulta e validação prévia de permissão do usuário
+    console.log("CANCELAMENTO: executando UPDATE direto");
+    const { data: bookingBefore, error: bookingBeforeError } = await db
+      .from('reservas')
+      .select('id, grupo_id, criador_id, status, cancelado_por, cancelado_em')
+      .eq('id', id)
+      .maybeSingle();
+
+    console.log("RESERVA ANTES DO CANCELAMENTO", bookingBefore);
+
+    if (bookingBeforeError) {
+      console.error("ERRO AO CONSULTAR RESERVA ANTES DO CANCELAMENTO:", bookingBeforeError);
+      throw new Error('Não foi possível verificar a reserva antes de cancelar.');
+    }
+
+    if (!bookingBefore) {
+      throw new Error('Reserva não encontrada no banco.');
+    }
+
+    if (bookingBefore.status === 'cancelada') {
+      console.log("Reserva já está com status 'cancelada'.");
+      return;
+    }
+
+    const isCreator = bookingBefore.criador_id === userId;
+    const isAdmin = ['PROPRIETARIO', 'ADMINISTRADOR'].includes(role);
+
+    if (!isCreator && !isAdmin) {
+      throw new Error('Você não tem permissão para cancelar esta reserva.');
+    }
+
+    // 4. Executar UPDATE no Supabase
+    const nowIso = new Date().toISOString();
+    const { data: updatedBooking, error: updateError } = await db
+      .from('reservas')
+      .update({
+        status: 'cancelada',
+        cancelado_por: userId,
+        cancelado_em: nowIso
+      })
+      .eq('id', id)
+      .select('id, status, criador_id, cancelado_por, cancelado_em');
+
+    console.log("CANCELAMENTO: resultado UPDATE", {
+      data: updatedBooking,
+      error: updateError
+    });
+
+    console.log("LINHAS ALTERADAS:", updatedBooking);
+
+    if (updateError) {
+      console.error("ERRO NO UPDATE DE CANCELAMENTO:", updateError);
+      const msg = String(updateError.message || '');
+      const code = String(updateError.code || '');
+
+      if (code === '42501' || msg.includes('row-level security') || msg.includes('permission') || msg.includes('policy')) {
+        throw new Error('Você não tem permissão para cancelar esta reserva (RLS).');
+      }
+      if (msg.includes('JWT') || msg.includes('session') || msg.includes('token') || msg.includes('Auth session missing')) {
+        throw new Error('Sua sessão expirou. Entre novamente.');
+      }
+      if (msg.includes('Failed to fetch') || msg.includes('Network')) {
+        throw new Error('Não foi possível conectar ao servidor. Verifique sua internet.');
+      }
+      throw new Error(msg || 'Erro ao cancelar reserva.');
+    }
+
+    if (!updatedBooking || updatedBooking.length === 0) {
+      throw new Error(
+        "Nenhuma reserva foi alterada. Verifique RLS, ID da reserva e permissões."
+      );
+    }
+
+    if (updatedBooking[0].status !== 'cancelada') {
+      throw new Error(`Status da reserva não mudou para 'cancelada' (status retornado: ${updatedBooking[0].status}).`);
+    }
   },
 
   async getUserNotifications(userId: string, groupId?: string): Promise<Notificacao[]> {
@@ -841,16 +1202,22 @@ export const DbService = {
   },
 
   async getUserBookingsAll(userId: string, groupId?: string): Promise<Reserva[]> {
-    let query = requireDb().from('reservas').select('*, quadra:quadras(numero), horario:horarios(hora_inicio,hora_fim), criador:usuarios(nome)').eq('criador_id', userId).order('data', { ascending: false });
+    let query = requireDb().from('reservas').select('*, quadra:quadras(numero), horario:horarios(hora_inicio,hora_fim), criador:usuarios!reservas_criador_id_fkey(id, nome), adversario:usuarios!reservas_adversario_id_fkey(id, nome)').eq('criador_id', userId).order('data', { ascending: false });
     if (groupId) query = query.eq('grupo_id', groupId);
     const { data, error } = await query;
-    if (error) fail('Erro ao carregar histórico', error);
+    if (error) {
+      console.error('Erro ao carregar histórico:', error);
+      fail('Erro ao carregar histórico', error);
+    }
     return Promise.all((data || []).map(mapReservation));
   },
 
   async getAllGroupBookings(groupId: string): Promise<Reserva[]> {
-    const { data, error } = await requireDb().from('reservas').select('*, quadra:quadras(numero), horario:horarios(hora_inicio,hora_fim), criador:usuarios(nome)').eq('grupo_id', groupId).order('data', { ascending: false });
-    if (error) fail('Erro ao carregar reservas', error);
+    const { data, error } = await requireDb().from('reservas').select('*, quadra:quadras(numero), horario:horarios(hora_inicio,hora_fim), criador:usuarios!reservas_criador_id_fkey(id, nome), adversario:usuarios!reservas_adversario_id_fkey(id, nome)').eq('grupo_id', groupId).order('data', { ascending: false });
+    if (error) {
+      console.error('Erro ao carregar reservas:', error);
+      fail('Erro ao carregar reservas', error);
+    }
     return Promise.all((data || []).map(mapReservation));
   },
 

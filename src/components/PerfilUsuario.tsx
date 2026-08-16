@@ -33,22 +33,17 @@ export const PerfilUsuario: React.FC<PerfilUsuarioProps> = ({ session, onRefresh
   const [userBookings, setUserBookings] = useState<Reserva[]>([]);
   const completedCount = userBookings.length;
 
-  // Form states
+  // Form states (Apenas dados pessoais permitidos: nome, whatsapp, foto_url)
   const [nomeInput, setNomeInput] = useState(user?.nome || '');
   const [phoneInput, setPhoneInput] = useState(user?.whatsapp || '');
   const [fotoUrlInput, setFotoUrlInput] = useState(user?.foto_url || '');
-  const [classeInput, setClasseInput] = useState<PlayerClass>(playerClass);
-  const [papelInput, setPapelInput] = useState<PerfilRole>(currentMember?.perfil || 'JOGADOR');
-  const [statusInput, setStatusInput] = useState<MemberStatus>(currentMember?.status || 'ATIVO');
   const [isEditingProfile, setIsEditingProfile] = useState(false);
 
   useEffect(() => {
-    setClasseInput(playerClass);
-    if (currentMember) {
-      setPapelInput(currentMember.perfil);
-      setStatusInput(currentMember.status);
-    }
-  }, [playerClass, currentMember]);
+    setNomeInput(user?.nome || '');
+    setPhoneInput(user?.whatsapp || '');
+    setFotoUrlInput(user?.foto_url || '');
+  }, [user]);
 
   // Password Modal State
   const [showPassModal, setShowPassModal] = useState(false);
@@ -71,41 +66,23 @@ export const PerfilUsuario: React.FC<PerfilUsuarioProps> = ({ session, onRefresh
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    const classChanged = currentMember && currentMember.perfil === 'PROPRIETARIO' && currentMember.classe !== classeInput;
     try {
+      // Atualização estritamente limitada aos dados pessoais autorizados em public.usuarios
       await DbService.updateUserProfile(user.id, {
-        nome: nomeInput,
-        whatsapp: phoneInput,
-        foto_url: fotoUrlInput
+        nome: nomeInput.trim(),
+        whatsapp: phoneInput.trim(),
+        foto_url: fotoUrlInput.trim() || null
       });
-      if (currentMember) {
-        if (currentMember.perfil === 'PROPRIETARIO' && currentMember.classe !== classeInput) {
-          await DbService.updateMemberClass(currentMember.id, classeInput);
-        }
-        if (currentMember.perfil !== papelInput) {
-          await DbService.updateMemberPerfil(currentMember.id, papelInput);
-        }
-        if (currentMember.status !== statusInput) {
-          await DbService.updateMemberStatus(currentMember.id, statusInput);
-        }
-      }
+
       setIsEditingProfile(false);
       onRefreshSession();
 
-      const msg = classChanged
-        ? formatClassUpdateToastMessage(true, user.nome, classeInput)
-        : 'Perfil e dados atualizados com sucesso!';
-
+      const msg = 'Dados pessoais atualizados com sucesso!';
       toast.success(msg);
       setFeedback({ type: 'success', message: msg });
       setTimeout(() => setFeedback(null), 3500);
     } catch (err: any) {
-      if (classChanged) {
-        setClasseInput(currentMember?.classe || 'Sem Classe');
-        toast.error('Não foi possível atualizar a classe. Tente novamente.');
-      } else {
-        toast.error(err.message || 'Erro ao atualizar perfil.');
-      }
+      toast.error(err.message || 'Erro ao atualizar perfil.');
       setFeedback({ type: 'error', message: err.message || 'Erro ao atualizar perfil.' });
     }
   };
@@ -275,65 +252,6 @@ export const PerfilUsuario: React.FC<PerfilUsuarioProps> = ({ session, onRefresh
                 className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </div>
-
-            <div className="space-y-1">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-bold uppercase text-slate-500">Sua Classe no Grupo</label>
-                {currentMember?.perfil !== 'PROPRIETARIO' && (
-                  <span className="text-[10px] text-slate-400 font-semibold">Definida pelo proprietário</span>
-                )}
-              </div>
-              <select
-                value={classeInput}
-                disabled={currentMember?.perfil !== 'PROPRIETARIO'}
-                onChange={(e) => setClasseInput(e.target.value as PlayerClass)}
-                className={`w-full px-4 py-2.5 rounded-2xl border text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900 ${
-                  currentMember?.perfil !== 'PROPRIETARIO' ? 'bg-slate-100 border-slate-200 cursor-not-allowed opacity-60' : 'bg-slate-50 border-slate-200 cursor-pointer'
-                }`}
-              >
-                <option value="Sem Classe">Sem Classe</option>
-                <option value="Classe A (1º)">Classe A (1º)</option>
-                <option value="Classe B (2º)">Classe B (2º)</option>
-                <option value="Classe C (3º)">Classe C (3º)</option>
-                <option value="Classe D (4º)">Classe D (4º)</option>
-                <option value="Classe E (5º)">Classe E (5º)</option>
-                <option value="Classe F (6º)">Classe F (6º)</option>
-                <option value="Classe G (7º)">Classe G (7º)</option>
-                <option value="Classe Infantil">Classe Infantil</option>
-                <option value="Classe Juvenil">Classe Juvenil</option>
-                <option value="Classe (50+)">Classe (50+)</option>
-              </select>
-            </div>
-
-            {(currentMember?.perfil === 'PROPRIETARIO' || currentMember?.perfil === 'ADMINISTRADOR') && (
-              <>
-                <div className="space-y-1">
-                  <label className="text-xs font-bold uppercase text-slate-500">Seu Papel no Grupo</label>
-                  <select
-                    value={papelInput}
-                    onChange={(e) => setPapelInput(e.target.value as PerfilRole)}
-                    className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900 cursor-pointer"
-                  >
-                    <option value="PROPRIETARIO">Proprietário</option>
-                    <option value="ADMINISTRADOR">Administrador</option>
-                    <option value="JOGADOR">Jogador</option>
-                  </select>
-                </div>
-
-                <div className="space-y-1 sm:col-span-2">
-                  <label className="text-xs font-bold uppercase text-slate-500">Seu Status no Grupo</label>
-                  <select
-                    value={statusInput}
-                    onChange={(e) => setStatusInput(e.target.value as MemberStatus)}
-                    className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900 cursor-pointer"
-                  >
-                    <option value="ATIVO">Ativo</option>
-                    <option value="PENDENTE">Pendente</option>
-                    <option value="BLOQUEADO">Bloqueado</option>
-                  </select>
-                </div>
-              </>
-            )}
 
             <div className="space-y-1 sm:col-span-2">
               <label className="text-xs font-bold uppercase text-slate-500">URL da Foto de Perfil (Opcional)</label>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { AuthSession, MembroGrupo, MemberStatus, PerfilRole, PlayerClass, Reserva } from '../types';
+import { AuthSession, MembroGrupo, MemberStatus, PerfilRole, PlayerClass, Reserva, podeAlterarClasse } from '../types';
 import { DbService } from '../lib/db';
 import { toast, formatClassUpdateToastMessage } from '../lib/toast';
 import {
@@ -40,6 +40,13 @@ export const JogadoresManager: React.FC<JogadoresManagerProps> = ({ session, onR
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [classFilter, setClassFilter] = useState<string>('ALL');
 
+  // Owner-only Class Change Confirmation Modal State
+  const [classChangeModal, setClassChangeModal] = useState<{
+    member: MembroGrupo;
+    newClass: PlayerClass;
+  } | null>(null);
+  const [isSubmittingClass, setIsSubmittingClass] = useState(false);
+
   // Confirmation Modals State
   const [actionConfirm, setActionConfirm] = useState<{
     type: 'REMOVE' | 'BLOCK' | 'UNBLOCK' | 'ROLE';
@@ -51,6 +58,8 @@ export const JogadoresManager: React.FC<JogadoresManagerProps> = ({ session, onR
   const [historyMember, setHistoryMember] = useState<MembroGrupo | null>(null);
   const [historyBookings, setHistoryBookings] = useState<Reserva[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+
+  const canChangeClass = podeAlterarClasse(session);
 
   const loadMembers = async () => {
     if (!activeGroup) return;
@@ -85,30 +94,27 @@ export const JogadoresManager: React.FC<JogadoresManagerProps> = ({ session, onR
     }
   };
 
-  const handleUpdateClass = async (memberId: string, playerClass: PlayerClass) => {
-    const targetMember = members.find((m) => m.id === memberId);
-    const previousClass = targetMember?.classe;
-    const isSelf = targetMember?.usuario_id === user?.id;
-    const memberName = targetMember?.usuario?.nome || 'jogador';
+  const handleConfirmClassChange = async () => {
+    if (!classChangeModal || isSubmittingClass || !activeGroup) return;
+    const { member, newClass } = classChangeModal;
+    const isSelf = member.usuario_id === user?.id;
+    const memberName = member.usuario?.nome || 'jogador';
 
-    // Optimistic UI update
-    setMembers((prev) =>
-      prev.map((m) => (m.id === memberId ? { ...m, classe: playerClass } : m))
-    );
-
+    setIsSubmittingClass(true);
     try {
-      const updated = await DbService.updateMemberClass(memberId, playerClass);
+      const updated = await DbService.updateMemberClass(member.id, newClass, activeGroup.id);
       setMembers(updated);
       if (onRefreshSession) {
         await onRefreshSession();
       }
-      toast.success(formatClassUpdateToastMessage(isSelf, memberName, playerClass));
+      toast.success(formatClassUpdateToastMessage(isSelf, memberName, newClass));
+      setClassChangeModal(null);
     } catch (err: any) {
-      setMembers((prev) =>
-        prev.map((m) => (m.id === memberId ? { ...m, classe: previousClass } : m))
-      );
-      toast.error('Não foi possível atualizar a classe. Tente novamente.');
+      console.error('Erro ao alterar classe:', err);
+      toast.error(err.message || 'Não foi possível alterar a classe. Somente o proprietário tem permissão.');
       loadMembers();
+    } finally {
+      setIsSubmittingClass(false);
     }
   };
 
@@ -368,41 +374,26 @@ export const JogadoresManager: React.FC<JogadoresManagerProps> = ({ session, onR
                     </div>
                   </div>
 
-                  {/* Right: Class Selector & Actions */}
+                  {/* Right: Class Display, Owner-only Action & Other Actions */}
                   <div className="flex flex-wrap items-center gap-2.5 pt-2 lg:pt-0 border-t lg:border-t-0 border-slate-100">
                     
-                    {/* Class Selector */}
-                    {isOwnerOrAdmin && (
-                      <div className="flex items-center gap-1.5 bg-slate-50 px-2.5 py-1.5 rounded-2xl border border-slate-200">
-                        <span className="text-[10px] font-extrabold uppercase text-slate-400">Classe:</span>
-                        <select
-                          value={m.classe || 'Sem Classe'}
-                          disabled={m.perfil === 'PROPRIETARIO' && activeRole !== 'PROPRIETARIO'}
-                          onChange={(e) => {
-                            const newCls = e.target.value as PlayerClass;
-                            if (m.status === 'PENDENTE') {
-                              handleApproveWithClass(m.id, newCls);
-                            } else {
-                              handleUpdateClass(m.id, newCls);
-                            }
-                          }}
-                          className={`bg-transparent text-xs font-black text-slate-900 focus:outline-none ${
-                            m.perfil === 'PROPRIETARIO' && activeRole !== 'PROPRIETARIO' ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
-                          }`}
-                        >
-                          <option value="Sem Classe">Sem Classe</option>
-                          <option value="Classe A (1º)">Classe A (1º)</option>
-                          <option value="Classe B (2º)">Classe B (2º)</option>
-                          <option value="Classe C (3º)">Classe C (3º)</option>
-                          <option value="Classe D (4º)">Classe D (4º)</option>
-                          <option value="Classe E (5º)">Classe E (5º)</option>
-                          <option value="Classe F (6º)">Classe F (6º)</option>
-                          <option value="Classe G (7º)">Classe G (7º)</option>
-                          <option value="Classe Infantil">Classe Infantil</option>
-                          <option value="Classe Juvenil">Classe Juvenil</option>
-                          <option value="Classe (50+)">Classe (50+)</option>
-                        </select>
-                      </div>
+                    {/* Class Display Badge (Sem select direto na lista) */}
+                    <div className="flex items-center gap-1.5 bg-slate-50 px-2.5 py-1.5 rounded-2xl border border-slate-200">
+                      <span className="text-[10px] font-extrabold uppercase text-slate-400">Classe:</span>
+                      <span className="text-xs font-black text-slate-900">{m.classe || 'Sem Classe'}</span>
+                    </div>
+
+                    {/* Owner-only "Alterar classe" action button with confirmation modal */}
+                    {canChangeClass && m.status === 'ATIVO' && (
+                      <button
+                        type="button"
+                        onClick={() => setClassChangeModal({ member: m, newClass: m.classe || 'Sem Classe' })}
+                        className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs border border-slate-200 transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 shadow-2xs"
+                        title="Alterar classe do jogador (Exclusivo para o Proprietário)"
+                      >
+                        <Sliders className="w-3.5 h-3.5 text-slate-600" />
+                        <span>Alterar classe</span>
+                      </button>
                     )}
 
                     {/* Pending Approval Button */}
@@ -621,6 +612,99 @@ export const JogadoresManager: React.FC<JogadoresManagerProps> = ({ session, onR
                 className="px-4 py-2 rounded-2xl bg-slate-900 text-white font-bold text-xs cursor-pointer"
               >
                 Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 6. OWNER-ONLY CLASS CHANGE CONFIRMATION MODAL */}
+      {classChangeModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 max-w-md w-full border border-slate-200 shadow-2xl space-y-5 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-[#0F172A] text-[#ccff00] flex items-center justify-center font-black">
+                  <Sliders className="w-4 h-4" />
+                </div>
+                <h3 className="font-black text-slate-900 text-base">Alterar Classe do Jogador</h3>
+              </div>
+              <button
+                onClick={() => !isSubmittingClass && setClassChangeModal(null)}
+                disabled={isSubmittingClass}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center cursor-pointer transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3.5 text-xs">
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/80 space-y-2">
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-500 font-bold uppercase text-[10px]">Jogador:</span>
+                  <strong className="text-slate-900 text-xs font-black">{classChangeModal.member.usuario?.nome}</strong>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-500 font-bold uppercase text-[10px]">Classe Atual:</span>
+                  <span className="font-extrabold text-amber-800 bg-amber-100/70 px-2.5 py-0.5 rounded-lg border border-amber-300/80">
+                    {classChangeModal.member.classe || 'Sem Classe'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase text-slate-600 block">Selecione a Nova Classe:</label>
+                <select
+                  value={classChangeModal.newClass}
+                  disabled={isSubmittingClass}
+                  onChange={(e) => setClassChangeModal({ ...classChangeModal, newClass: e.target.value as PlayerClass })}
+                  className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900 cursor-pointer"
+                >
+                  <option value="Sem Classe">Sem Classe</option>
+                  <option value="Classe A (1º)">Classe A (1º)</option>
+                  <option value="Classe B (2º)">Classe B (2º)</option>
+                  <option value="Classe C (3º)">Classe C (3º)</option>
+                  <option value="Classe D (4º)">Classe D (4º)</option>
+                  <option value="Classe E (5º)">Classe E (5º)</option>
+                  <option value="Classe F (6º)">Classe F (6º)</option>
+                  <option value="Classe G (7º)">Classe G (7º)</option>
+                  <option value="Classe Infantil">Classe Infantil</option>
+                  <option value="Classe Juvenil">Classe Juvenil</option>
+                  <option value="Classe (50+)">Classe (50+)</option>
+                </select>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-600 leading-relaxed">
+                ℹ️ <strong>Regra de Negócio:</strong> Somente o proprietário do grupo possui permissão para definir ou alterar o nível técnico dos jogadores.
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setClassChangeModal(null)}
+                disabled={isSubmittingClass}
+                className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmClassChange}
+                disabled={isSubmittingClass}
+                className="px-5 py-2.5 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-[#ccff00] text-xs font-extrabold shadow-md transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                {isSubmittingClass ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-[#ccff00] border-t-transparent rounded-full animate-spin" />
+                    <span>Alterando...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Confirmar Alteração</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

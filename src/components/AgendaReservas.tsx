@@ -11,6 +11,14 @@ import { DbService } from '../lib/db';
 import { toast } from '../lib/toast';
 import { getSupabaseClient } from '../lib/supabase';
 import {
+  getTodayCivilDate,
+  addDaysCivil,
+  formatDisplayDate,
+  isPastCivilDate,
+  isPastTimeSlot,
+  formatCivilDate
+} from '../lib/dateUtils';
+import {
   Calendar as CalendarIcon,
   Clock,
   CheckCircle2,
@@ -36,7 +44,7 @@ interface AgendaReservasProps {
 export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
   const { user, activeGroup, activeRole } = session;
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getTodayCivilDate();
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
 
   // Class Filter: 'Todas' | 'Classe A' | 'Classe B' | 'Classe C' | 'Classe D'
@@ -64,9 +72,20 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
   const [bookingTarget, setBookingTarget] = useState<{
     slot: TimeSlot;
     quadra: number;
+    quadra_id?: string;
   } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
+
+  // Cancel Modal state (React nativo sem window.confirm)
+  const [bookingToCancel, setBookingToCancel] = useState<{
+    id: string;
+    quadra_numero: number;
+    horario_label: string;
+    jogador_nome?: string;
+  } | null>(null);
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [cancelModalError, setCancelModalError] = useState<string | null>(null);
 
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
@@ -123,20 +142,38 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
 
   // Date Navigation Helpers
   const handleDateOffset = (offsetDays: number) => {
-    const [y, m, d] = selectedDate.split('-').map(Number);
-    const current = new Date(y, m - 1, d);
-    current.setDate(current.getDate() + offsetDays);
-    const year = current.getFullYear();
-    const month = String(current.getMonth() + 1).padStart(2, '0');
-    const day = String(current.getDate()).padStart(2, '0');
-    setSelectedDate(`${year}-${month}-${day}`);
+    const nextDate = addDaysCivil(selectedDate, offsetDays);
+    if (isPastCivilDate(nextDate)) {
+      setSelectedDate(todayStr);
+      return;
+    }
+    setSelectedDate(nextDate);
   };
 
-  const formatDisplayDate = (dStr: string) => {
-    const [y, m, d] = dStr.split('-');
-    const dateObj = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
-    const dayName = dateObj.toLocaleDateString('pt-BR', { weekday: 'short' });
-    return `${d}/${m}/${y} (${dayName.toUpperCase()})`;
+  // Open Booking Confirmation Modal Handler
+  const handleOpenBookingModal = (slot: TimeSlot, quadraNum: number, quadraId?: string) => {
+    if (isPastCivilDate(selectedDate)) {
+      toast.error('Não é possível reservar horários em datas anteriores.');
+      setFeedback({
+        type: 'error',
+        message: 'Não é possível reservar horários em datas anteriores.'
+      });
+      setTimeout(() => setFeedback(null), 4000);
+      return;
+    }
+
+    if (isPastTimeSlot(selectedDate, slot.inicio || slot.label)) {
+      toast.error('Este horário já começou e não pode mais ser reservado.');
+      setFeedback({
+        type: 'error',
+        message: 'Este horário já começou e não pode mais ser reservado.'
+      });
+      setTimeout(() => setFeedback(null), 4000);
+      return;
+    }
+
+    setModalError(null);
+    setBookingTarget({ slot, quadra: quadraNum, quadra_id: quadraId });
   };
 
   // Save Admin Court Configuration for the Day
@@ -187,6 +224,16 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
   const handleConfirmReservation = async () => {
     if (!bookingTarget || isSubmitting) return;
 
+    if (isPastCivilDate(selectedDate)) {
+      setModalError('Não é possível reservar horários em datas anteriores.');
+      return;
+    }
+
+    if (isPastTimeSlot(selectedDate, bookingTarget.slot.inicio || bookingTarget.slot.label)) {
+      setModalError('Este horário já começou e não pode mais ser reservado.');
+      return;
+    }
+
     setIsSubmitting(true);
     setModalError(null);
 
@@ -197,49 +244,66 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
         horario_id: bookingTarget.slot.id,
         horario_label: bookingTarget.slot.label,
         quadra_numero: bookingTarget.quadra,
+        quadra_id: bookingTarget.quadra_id,
         jogador_id: user.id,
-        jogador_nome: user.nome,
-        jogador_classe: 'Sem Classe'
+        jogador_nome: user.nome
       });
 
-      const confirmedSlot = bookingTarget;
       setBookingTarget(null);
       setModalError(null);
-      toast.success('Reserva realizada com sucesso!');
+      toast.success('Reserva confirmada com sucesso!');
       setFeedback({
         type: 'success',
-        message: `Reserva realizada com sucesso na Quadra ${confirmedSlot.quadra} (${confirmedSlot.slot.label})!`
+        message: 'Reserva confirmada com sucesso!'
       });
       setTimeout(() => setFeedback(null), 4000);
       await refreshData();
     } catch (err: any) {
+      console.error("CREATE BOOKING - EXCEPTION:", err);
       const errorMsg = err.message || 'Não foi possível concluir a reserva. Tente novamente.';
-      console.error('Erro ao criar reserva:', err);
+      // Exibe a mensagem de erro exclusivamente dentro do modal para permitir nova tentativa sem duplicação de toast
       setModalError(errorMsg);
-      toast.error(errorMsg);
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Cancel Reservation
-  const handleCancelReservation = async (bookingId: string) => {
-    if (!confirm('Deseja realmente cancelar esta reserva?')) return;
+  // Cancel Reservation Modal Handlers
+  const handleOpenCancelModal = (booking: Reserva, quadraNum: number, horarioLabel: string) => {
+    console.log("CANCEL CLICK DEBUG", {
+      reservaId: booking.id,
+      usuarioId: user?.id,
+      statusAtual: 'confirmada',
+      criadorId: booking.jogador_id
+    });
+    setCancelModalError(null);
+    setBookingToCancel({
+      id: booking.id,
+      quadra_numero: quadraNum,
+      horario_label: horarioLabel,
+      jogador_nome: booking.jogador_nome
+    });
+  };
+
+  const handleConfirmCancelReservation = async () => {
+    if (!bookingToCancel) return;
+    setIsCancelling(true);
+    setCancelModalError(null);
 
     try {
-      await DbService.cancelBooking(bookingId, user.id, activeRole || 'JOGADOR');
+      await DbService.cancelBooking(bookingToCancel.id, user.id, activeRole || 'JOGADOR');
       setFeedback({
         type: 'success',
         message: 'Reserva cancelada com sucesso.'
       });
       setTimeout(() => setFeedback(null), 4000);
+      setBookingToCancel(null);
       await refreshData();
     } catch (err: any) {
-      setFeedback({
-        type: 'error',
-        message: err.message || 'Não foi possível cancelar.'
-      });
-      setTimeout(() => setFeedback(null), 4000);
+      console.error("ERRO AO CANCELAR RESERVA (Agenda):", err);
+      setCancelModalError(err.message || 'Não foi possível cancelar.');
+    } finally {
+      setIsCancelling(false);
     }
   };
 
@@ -382,8 +446,9 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
             <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-2xl border border-slate-200">
               <button
                 onClick={() => handleDateOffset(-1)}
-                className="p-2 hover:bg-white rounded-xl text-slate-700 transition-colors"
-                title="Dia Anterior"
+                disabled={selectedDate <= todayStr}
+                className="p-2 hover:bg-white rounded-xl text-slate-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                title={selectedDate <= todayStr ? "Datas anteriores a hoje bloqueadas" : "Dia Anterior"}
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
@@ -396,12 +461,10 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
                 Hoje
               </button>
               <button
-                onClick={() => {
-                  const tom = new Date();
-                  tom.setDate(tom.getDate() + 1);
-                  setSelectedDate(tom.toISOString().split('T')[0]);
-                }}
-                className="px-3 py-1.5 rounded-xl text-xs font-bold text-slate-700 hover:bg-white transition-all"
+                onClick={() => setSelectedDate(addDaysCivil(todayStr, 1))}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  selectedDate === addDaysCivil(todayStr, 1) ? 'bg-slate-800 text-white shadow-xs' : 'text-slate-700 hover:bg-white'
+                }`}
               >
                 Amanhã
               </button>
@@ -418,8 +481,23 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
               <CalendarIcon className="w-4 h-4 text-slate-600 absolute left-3 pointer-events-none" />
               <input
                 type="date"
+                min={todayStr}
                 value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (!val) return;
+                  if (isPastCivilDate(val)) {
+                    toast.error('Não é possível selecionar datas anteriores a hoje.');
+                    setFeedback({
+                      type: 'error',
+                      message: 'Não é possível selecionar datas anteriores a hoje.'
+                    });
+                    setTimeout(() => setFeedback(null), 4000);
+                    setSelectedDate(todayStr);
+                    return;
+                  }
+                  setSelectedDate(val);
+                }}
                 className="pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-2xl text-xs sm:text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-500 cursor-pointer"
               />
             </div>
@@ -648,8 +726,8 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
                           </span>
 
                           <button
-                            onClick={() => handleCancelReservation(existingBooking.id)}
-                            className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold border border-white/30 transition-all active:scale-95"
+                            onClick={() => handleOpenCancelModal(existingBooking, quadraNum, slot.label)}
+                            className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold border border-white/30 transition-all active:scale-95 cursor-pointer"
                           >
                             Cancelar
                           </button>
@@ -695,8 +773,8 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
 
                           {isAdmin && (
                             <button
-                              onClick={() => handleCancelReservation(existingBooking.id)}
-                              className="px-2.5 py-1 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold"
+                              onClick={() => handleOpenCancelModal(existingBooking, quadraNum, slot.label)}
+                              className="px-2.5 py-1 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold cursor-pointer"
                             >
                               Cancelar Admin
                             </button>
@@ -706,7 +784,55 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
                     );
                   }
 
-                  // 3. LIVRE (CINZA SLATE ELEGANTE)
+                  const isPastDate = isPastCivilDate(selectedDate);
+                  const isPastSlot = isPastTimeSlot(selectedDate, slot.inicio || slot.label);
+
+                  // 3. HORÁRIO PASSADO / ENCERRADO (DISPONÍVEL NO PASSADO)
+                  if (isPastSlot) {
+                    return (
+                      <div
+                        key={quadraNum}
+                        className="p-4 rounded-2xl bg-slate-100/70 border-2 border-slate-200 text-slate-400 shadow-2xs flex flex-col justify-between space-y-3"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="px-2.5 py-0.5 rounded-lg bg-slate-200 text-slate-600 font-black text-[11px] uppercase tracking-wider">
+                            Quadra {quadraNum}
+                          </span>
+                          <span className="px-2.5 py-0.5 rounded-lg bg-slate-300 text-slate-700 font-black text-[10px] uppercase shadow-2xs">
+                            Encerrado
+                          </span>
+                        </div>
+
+                        <div>
+                          <p className="text-xs text-slate-500 font-bold flex items-center gap-1">
+                            <Clock className="w-3.5 h-3.5 text-slate-400" />
+                            <span>Horário Encerrado</span>
+                          </p>
+                          <p className="text-[11px] text-slate-400 mt-0.5 font-medium">
+                            {isPastDate ? 'Data anterior a hoje.' : 'Este horário já começou hoje.'}
+                          </p>
+                        </div>
+
+                        <div className="pt-2 border-t border-slate-200/70 flex items-center justify-end">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (isPastDate) {
+                                toast.error('Não é possível reservar horários em datas anteriores.');
+                              } else {
+                                toast.error('Este horário já começou e não pode mais ser reservado.');
+                              }
+                            }}
+                            className="w-full py-2.5 rounded-xl bg-slate-200/60 hover:bg-slate-200 text-slate-500 font-bold text-xs cursor-not-allowed flex items-center justify-center gap-1.5 transition-colors"
+                          >
+                            <span>{isPastDate ? 'Data Passada' : 'Horário Encerrado'}</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  // 4. LIVRE (CINZA SLATE ELEGANTE)
                   return (
                     <div
                       key={quadraNum}
@@ -733,9 +859,17 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
 
                       <div className="pt-2 border-t border-slate-200 flex items-center justify-end">
                         <button
+                          type="button"
                           onClick={() => {
-                            setModalError(null);
-                            setBookingTarget({ slot, quadra: quadraNum });
+                            const courtObj = courtConfig.quadras?.find(q => q.numero === quadraNum);
+                            console.log("QUADRA SELECIONADA", {
+                              quadraNumero: quadraNum,
+                              quadraId: courtObj?.id,
+                              court: courtObj,
+                              data: selectedDate,
+                              slot
+                            });
+                            handleOpenBookingModal(slot, quadraNum, courtObj?.id);
                           }}
                           className="w-full py-2.5 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-white font-extrabold text-xs shadow-md transition-all active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer"
                         >
@@ -819,10 +953,91 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
                 {isSubmitting ? (
                   <>
                     <span className="inline-block w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    <span>Reservando...</span>
+                    <span>Confirmando...</span>
                   </>
                 ) : (
                   <span>Confirmar Reserva</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CANCEL CONFIRMATION MODAL (React Nativo sem window.confirm) */}
+      {bookingToCancel && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full border border-slate-200 shadow-2xl space-y-6 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+              <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 border border-rose-200 flex items-center justify-center text-2xl font-bold shrink-0">
+                🎾
+              </div>
+              <div>
+                <h3 className="font-black text-xl text-slate-900">Cancelar reserva?</h3>
+                <p className="text-xs text-slate-500 font-medium">
+                  {activeGroup.nome} — {formatDisplayDate(selectedDate)}
+                </p>
+              </div>
+            </div>
+
+            {/* Mensagem de confirmação solicitada */}
+            <p className="text-sm text-slate-600 leading-relaxed font-medium">
+              Tem certeza de que deseja cancelar esta reserva? O horário ficará disponível novamente para outros jogadores.
+            </p>
+
+            {/* Alerta de erro dentro do modal caso ocorra falha */}
+            {cancelModalError && (
+              <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold flex items-start gap-2.5 animate-in fade-in">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <span>{cancelModalError}</span>
+              </div>
+            )}
+
+            {/* Dados reais da reserva selecionada */}
+            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500 font-semibold">Quadra:</span>
+                <span className="font-bold text-slate-900">Quadra {bookingToCancel.quadra_numero}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500 font-semibold">Horário:</span>
+                <span className="font-bold text-slate-900">{bookingToCancel.horario_label}</span>
+              </div>
+              {bookingToCancel.jogador_nome && (
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 font-semibold">Jogador:</span>
+                  <span className="font-bold text-slate-900">{bookingToCancel.jogador_nome}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                type="button"
+                disabled={isCancelling}
+                onClick={() => {
+                  if (!isCancelling) {
+                    setBookingToCancel(null);
+                    setCancelModalError(null);
+                  }
+                }}
+                className="flex-1 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer disabled:opacity-50 transition-all"
+              >
+                Voltar
+              </button>
+              <button
+                type="button"
+                disabled={isCancelling}
+                onClick={handleConfirmCancelReservation}
+                className="flex-1 py-3 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs shadow-md transition-all active:scale-95 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {isCancelling ? (
+                  <>
+                    <span className="inline-block w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span>Cancelando...</span>
+                  </>
+                ) : (
+                  <span>Sim, cancelar reserva</span>
                 )}
               </button>
             </div>

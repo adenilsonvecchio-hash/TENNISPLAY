@@ -935,4 +935,183 @@ BEGIN
   END IF;
 END $$;
 
+-- ==============================================================================
+-- RPC ATÔMICA E SEGURA: criar_reserva
+-- ==============================================================================
+CREATE OR REPLACE FUNCTION public.criar_reserva(
+  p_grupo_id UUID,
+  p_data DATE,
+  p_quadra_numero INT,
+  p_horario_id TEXT,
+  p_horario_inicio TEXT DEFAULT NULL,
+  p_horario_fim TEXT DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_user_id UUID := auth.uid();
+  v_membro RECORD;
+  v_quadra RECORD;
+  v_horario RECORD;
+  v_reserva RECORD;
+  v_user RECORD;
+  v_horario_uuid UUID;
+  v_inicio TIME;
+  v_fim TIME;
+BEGIN
+  -- 1. Validar autenticação
+  IF v_user_id IS NULL THEN
+    RAISE EXCEPTION 'Sua sessão expirou. Entre novamente.';
+  END IF;
+
+  -- 2. Validar vínculo do usuário com o grupo
+  SELECT * INTO v_membro
+  FROM public.membros_grupo
+  WHERE usuario_id = v_user_id AND grupo_id = p_grupo_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Seu cadastro ainda não está vinculado a este grupo.';
+  END IF;
+
+  IF v_membro.status = 'pendente' THEN
+    RAISE EXCEPTION 'Seu acesso ao grupo ainda está aguardando aprovação.';
+  END IF;
+
+  IF v_membro.status != 'ativo' THEN
+    RAISE EXCEPTION 'Seu cadastro não está ativo neste grupo.';
+  END IF;
+
+  -- 3. Obter ou validar a quadra do grupo
+  SELECT * INTO v_quadra
+  FROM public.quadras
+  WHERE grupo_id = p_grupo_id AND numero = p_quadra_numero AND ativa = TRUE;
+
+  IF NOT FOUND THEN
+    IF NOT EXISTS (SELECT 1 FROM public.quadras WHERE grupo_id = p_grupo_id) THEN
+      INSERT INTO public.quadras (grupo_id, numero, nome, ativa)
+      VALUES 
+        (p_grupo_id, 1, 'Quadra 1', TRUE),
+        (p_grupo_id, 2, 'Quadra 2', TRUE),
+        (p_grupo_id, 3, 'Quadra 3', TRUE),
+        (p_grupo_id, 4, 'Quadra 4', TRUE)
+      ON CONFLICT (grupo_id, numero) DO NOTHING;
+
+      SELECT * INTO v_quadra
+      FROM public.quadras
+      WHERE grupo_id = p_grupo_id AND numero = p_quadra_numero AND ativa = TRUE;
+    END IF;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Esta quadra não está disponível nesta data.';
+    END IF;
+  END IF;
+
+  -- 4. Obter ou validar o horário do grupo
+  IF p_horario_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    v_horario_uuid := p_horario_id::UUID;
+    SELECT * INTO v_horario
+    FROM public.horarios
+    WHERE id = v_horario_uuid AND grupo_id = p_grupo_id AND ativo = TRUE;
+  END IF;
+
+  IF v_horario IS NULL AND p_horario_inicio IS NOT NULL AND p_horario_fim IS NOT NULL THEN
+    BEGIN
+      v_inicio := p_horario_inicio::TIME;
+      v_fim := p_horario_fim::TIME;
+      SELECT * INTO v_horario
+      FROM public.horarios
+      WHERE grupo_id = p_grupo_id AND hora_inicio = v_inicio AND hora_fim = v_fim AND ativo = TRUE;
+    EXCEPTION WHEN OTHERS THEN
+      v_horario := NULL;
+    END;
+  END IF;
+
+  IF v_horario IS NULL THEN
+    IF NOT EXISTS (SELECT 1 FROM public.horarios WHERE grupo_id = p_grupo_id) THEN
+      INSERT INTO public.horarios (grupo_id, hora_inicio, hora_fim, turno, ativo)
+      VALUES
+        (p_grupo_id, '07:00'::TIME, '08:30'::TIME, 'manha', TRUE),
+        (p_grupo_id, '08:30'::TIME, '10:00'::TIME, 'manha', TRUE),
+        (p_grupo_id, '10:00'::TIME, '11:30'::TIME, 'manha', TRUE),
+        (p_grupo_id, '13:00'::TIME, '14:30'::TIME, 'tarde', TRUE),
+        (p_grupo_id, '14:30'::TIME, '16:00'::TIME, 'tarde', TRUE),
+        (p_grupo_id, '16:00'::TIME, '17:30'::TIME, 'tarde', TRUE),
+        (p_grupo_id, '17:30'::TIME, '19:00'::TIME, 'noite', TRUE),
+        (p_grupo_id, '19:00'::TIME, '20:30'::TIME, 'noite', TRUE),
+        (p_grupo_id, '20:30'::TIME, '22:00'::TIME, 'noite', TRUE)
+      ON CONFLICT DO NOTHING;
+
+      IF p_horario_inicio IS NOT NULL AND p_horario_fim IS NOT NULL THEN
+        SELECT * INTO v_horario
+        FROM public.horarios
+        WHERE grupo_id = p_grupo_id AND hora_inicio = v_inicio AND hora_fim = v_fim AND ativo = TRUE;
+      END IF;
+    END IF;
+
+    IF v_horario IS NULL THEN
+      RAISE EXCEPTION 'Este horário não está mais disponível.';
+    END IF;
+  END IF;
+
+  -- 5. Verificar conflito de reserva (concorrência)
+  IF EXISTS (
+    SELECT 1 FROM public.reservas
+    WHERE grupo_id = p_grupo_id
+      AND quadra_id = v_quadra.id
+      AND horario_id = v_horario.id
+      AND data = p_data
+      AND status IN ('aguardando', 'confirmada')
+  ) THEN
+    RAISE EXCEPTION 'Este horário acabou de ser reservado por outro jogador. Escolha outro horário.';
+  END IF;
+
+  -- 6. Inserir a reserva atomicamente
+  BEGIN
+    INSERT INTO public.reservas (
+      grupo_id,
+      quadra_id,
+      horario_id,
+      data,
+      criador_id,
+      criador_classe,
+      nome_convidado,
+      status
+    ) VALUES (
+      p_grupo_id,
+      v_quadra.id,
+      v_horario.id,
+      p_data,
+      v_user_id,
+      v_membro.classe,
+      'Adversário a definir',
+      'confirmada'
+    ) RETURNING * INTO v_reserva;
+  EXCEPTION WHEN unique_violation THEN
+    RAISE EXCEPTION 'Este horário acabou de ser reservado por outro jogador. Escolha outro horário.';
+  END;
+
+  -- 7. Carregar dados do usuário criador para resposta
+  SELECT nome INTO v_user FROM public.usuarios WHERE id = v_user_id;
+
+  RETURN jsonb_build_object(
+    'id', v_reserva.id,
+    'grupo_id', v_reserva.grupo_id,
+    'data', v_reserva.data,
+    'horario_id', v_reserva.horario_id,
+    'horario_label', TO_CHAR(v_horario.hora_inicio, 'HH24:MI') || ' às ' || TO_CHAR(v_horario.hora_fim, 'HH24:MI'),
+    'quadra_numero', v_quadra.numero,
+    'jogador_id', v_reserva.criador_id,
+    'jogador_nome', COALESCE(v_user.nome, 'Jogador'),
+    'jogador_classe', v_reserva.criador_classe,
+    'created_at', v_reserva.criado_em
+  );
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.criar_reserva(UUID, DATE, INT, TEXT, TEXT, TEXT) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.criar_reserva(UUID, DATE, INT, TEXT, TEXT, TEXT) TO authenticated;
+
 COMMIT;

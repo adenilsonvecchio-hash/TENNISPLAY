@@ -12,9 +12,9 @@ interface AppLogoProps {
 
 export const AppLogo: React.FC<AppLogoProps> = ({
   size = 'md',
-  showSubtitle = false,
+  showSubtitle = true,
   className = '',
-  subtitleText = '',
+  subtitleText = 'Sistema de Quadras',
   tennisColor,
   playColor
 }) => {
@@ -22,22 +22,22 @@ export const AppLogo: React.FC<AppLogoProps> = ({
     sm: {
       box: 'w-8 h-8 sm:w-9 sm:h-9 rounded-xl p-0.5',
       title: 'text-base sm:text-lg',
-      subtitle: 'text-[10px]'
+      subtitle: 'text-[9px] sm:text-[10px] leading-none font-bold text-slate-500 tracking-tight mt-0.5'
     },
     md: {
       box: 'w-10 h-10 sm:w-11 sm:h-11 rounded-2xl p-0.5 sm:p-1',
       title: 'text-xl sm:text-2xl',
-      subtitle: 'text-xs'
+      subtitle: 'text-[10px] sm:text-[11px] leading-none font-bold text-slate-500 tracking-tight mt-0.5'
     },
     lg: {
       box: 'w-12 h-12 sm:w-14 sm:h-14 rounded-2xl p-1',
       title: 'text-2xl sm:text-3xl',
-      subtitle: 'text-sm'
+      subtitle: 'text-xs leading-none font-bold text-slate-500 tracking-tight mt-0.5'
     },
     xl: {
       box: 'w-16 h-16 sm:w-18 sm:h-18 rounded-3xl p-1.5',
       title: 'text-4xl sm:text-5xl',
-      subtitle: 'text-base'
+      subtitle: 'text-sm leading-none font-bold text-slate-500 tracking-tight mt-1'
     }
   };
 
@@ -60,9 +60,9 @@ export const AppLogo: React.FC<AppLogoProps> = ({
         />
       </div>
 
-      <div className="flex flex-col justify-center">
+      <div className="flex flex-col justify-center items-center">
         <div
-          className={`font-logo font-black leading-none uppercase tracking-tight flex items-center ${currentSize.title}`}
+          className={`font-logo font-black leading-none uppercase tracking-tight flex items-center justify-center ${currentSize.title}`}
           style={{ letterSpacing: '-0.04em' }}
         >
           <span className={finalTennisColor}>
@@ -79,7 +79,7 @@ export const AppLogo: React.FC<AppLogoProps> = ({
           </span>
         </div>
         {showSubtitle && (
-          <span className={`font-semibold text-slate-600 block mt-0.5 ${currentSize.subtitle}`}>
+          <span className={`block text-center w-full ${currentSize.subtitle}`}>
             {subtitleText}
           </span>
         )}
