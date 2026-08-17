@@ -387,9 +387,9 @@ export const AppShell: React.FC<AppShellProps> = ({
         {children}
       </main>
 
-      {/* 3. MENU INFERIOR FIXO NO CELULAR (BOTTOM NAVIGATION < 768px COM BOTÃO CENTRAL "🎾 JOGAR") */}
+      {/* 3. MENU INFERIOR FIXO NO CELULAR (BOTTOM NAVIGATION < 768px COM 5 OPÇÕES E BOTÃO CENTRAL "🎾 JOGAR") */}
       <nav
-        className="fixed bottom-0 left-0 right-0 z-30 bg-[#0F172A] text-white border-t border-slate-800 shadow-2xl h-16 flex items-center justify-around px-2 select-none md:hidden"
+        className="fixed bottom-0 left-0 right-0 z-30 bg-[#0F172A] text-white border-t border-slate-800 shadow-2xl h-16 flex items-center justify-around px-1 select-none md:hidden"
         style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
       >
         <div className="w-full max-w-md mx-auto grid grid-cols-5 items-center">
@@ -403,8 +403,8 @@ export const AppShell: React.FC<AppShellProps> = ({
               activeTab === 'overview' ? 'text-[#ccff00] font-bold' : 'text-slate-400 hover:text-white'
             }`}
           >
-            <Home className="w-5 h-5 mb-0.5" />
-            <span className="text-[10px] tracking-tight font-bold">Início</span>
+            <Home className="w-5 h-5 mb-0.5 shrink-0" />
+            <span className="text-[10px] leading-tight tracking-tight font-bold truncate max-w-full">Início</span>
           </button>
 
           {/* 2. AGENDA */}
@@ -416,21 +416,21 @@ export const AppShell: React.FC<AppShellProps> = ({
               activeTab === 'agenda' ? 'text-[#ccff00] font-bold' : 'text-slate-400 hover:text-white'
             }`}
           >
-            <CalendarDays className="w-5 h-5 mb-0.5" />
-            <span className="text-[10px] tracking-tight font-bold">Agenda</span>
+            <CalendarDays className="w-5 h-5 mb-0.5 shrink-0" />
+            <span className="text-[10px] leading-tight tracking-tight font-bold truncate max-w-full">Agenda</span>
           </button>
 
           {/* 3. BOTÃO CENTRAL DE DESTAQUE: 🎾 JOGAR */}
           <button
             type="button"
             onClick={() => setShowJogarModal(true)}
-            aria-label="Jogar"
-            className="flex flex-col items-center justify-center -mt-4 cursor-pointer group"
+            aria-label="Jogar partida de tênis"
+            className="flex flex-col items-center justify-center -mt-4 cursor-pointer group focus:outline-none"
           >
             <div className="w-12 h-12 rounded-2xl bg-[#ccff00] hover:bg-[#b8e600] text-slate-950 flex items-center justify-center shadow-lg transition-transform group-active:scale-95 border-2 border-[#0F172A]">
-              <Swords className="w-6 h-6" />
+              <Swords className="w-6 h-6 shrink-0" />
             </div>
-            <span className="text-[9px] tracking-tight font-black text-[#ccff00] mt-0.5 uppercase">
+            <span className="text-[10px] leading-tight tracking-tight font-black text-[#ccff00] mt-0.5 uppercase whitespace-nowrap">
               Jogar
             </span>
           </button>
@@ -444,8 +444,8 @@ export const AppShell: React.FC<AppShellProps> = ({
               activeTab === 'ranking' ? 'text-[#ccff00] font-bold' : 'text-slate-400 hover:text-white'
             }`}
           >
-            <Trophy className="w-5 h-5 mb-0.5" />
-            <span className="text-[10px] tracking-tight font-bold">Ranking</span>
+            <Trophy className="w-5 h-5 mb-0.5 shrink-0" />
+            <span className="text-[10px] leading-tight tracking-tight font-bold truncate max-w-full">Ranking</span>
           </button>
 
           {/* 5. PERFIL */}
@@ -457,8 +457,8 @@ export const AppShell: React.FC<AppShellProps> = ({
               activeTab === 'profile' ? 'text-[#ccff00] font-bold' : 'text-slate-400 hover:text-white'
             }`}
           >
-            <User className="w-5 h-5 mb-0.5" />
-            <span className="text-[10px] tracking-tight font-bold">Perfil</span>
+            <User className="w-5 h-5 mb-0.5 shrink-0" />
+            <span className="text-[10px] leading-tight tracking-tight font-bold truncate max-w-full">Perfil</span>
           </button>
 
         </div>
