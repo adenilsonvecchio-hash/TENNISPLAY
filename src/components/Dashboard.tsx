@@ -7,7 +7,8 @@ import { getSupabaseClient } from '../lib/supabase';
 import { AgendaReservas } from './AgendaReservas';
 import { AdminPanel } from './AdminPanel';
 import { HistoricoReservas } from './HistoricoReservas';
-import { PerfilUsuario } from './PerfilUsuario';
+import { PerfilEsportivo } from './PerfilEsportivo';
+import { RankingView } from './RankingView';
 import { VisaoGeralOwner } from './VisaoGeralOwner';
 import { JogadoresManager } from './JogadoresManager';
 import {
@@ -384,11 +385,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
         />
       )}
 
-      {/* 6. MEU PERFIL */}
-      {activeTab === 'profile' && (
-        <PerfilUsuario
+      {/* 6. RANKING DO CLUBE */}
+      {activeTab === 'ranking' && (
+        <RankingView
           session={session}
           onRefreshSession={handleRefreshSession}
+          onNavigateTab={setActiveTab}
+        />
+      )}
+
+      {/* 7. MEU PERFIL ESPORTIVO */}
+      {activeTab === 'profile' && (
+        <PerfilEsportivo
+          session={session}
+          onRefreshSession={handleRefreshSession}
+          onNavigateTab={setActiveTab}
         />
       )}
 

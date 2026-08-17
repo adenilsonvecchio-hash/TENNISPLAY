@@ -8,8 +8,8 @@ Aplicativo React + TypeScript + Vite conectado exclusivamente ao Supabase.
 2. Configure no ambiente de execução:
 
 ```env
-VITE_SUPABASE_URL=https://SEU-PROJETO.supabase.co
-VITE_SUPABASE_ANON_KEY=sb_publishable_...
+VITE_SUPABASE_URL=https://slugmpepkblrknxpncvw.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=sua_publishable_key
 ```
 
 3. O projeto Supabase precisa possuir o esquema oficial com as tabelas:

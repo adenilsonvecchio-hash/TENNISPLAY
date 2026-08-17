@@ -13,7 +13,9 @@ import {
   Copy,
   Check,
   ArrowRight,
-  Shield
+  Shield,
+  Trophy,
+  Swords
 } from 'lucide-react';
 
 interface VisaoGeralOwnerProps {
@@ -274,8 +276,8 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
         )}
       </div>
 
-      {/* 4. ACESSOS RÁPIDOS DO JOGADOR (GRADE DE 4 OPÇÕES) */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 sm:gap-3.5">
+      {/* 4. ACESSOS RÁPIDOS DO JOGADOR */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3.5">
         
         {/* 1. Agenda */}
         <button
@@ -291,7 +293,21 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
           </span>
         </button>
 
-        {/* 2. Minhas Reservas */}
+        {/* 2. Ranking */}
+        <button
+          type="button"
+          onClick={() => onNavigateTab('ranking')}
+          className="bg-white hover:bg-slate-50 active:scale-[0.98] border border-slate-200 rounded-2xl p-4 sm:p-5 flex flex-col items-center justify-center text-center shadow-2xs transition-all cursor-pointer min-h-[96px] sm:min-h-[110px] group"
+        >
+          <div className="w-10 h-10 rounded-xl bg-[#0F172A] text-[#ccff00] flex items-center justify-center mb-2 group-hover:scale-105 transition-transform shadow-2xs">
+            <Trophy className="w-5 h-5" />
+          </div>
+          <span className="text-xs sm:text-sm font-extrabold text-slate-900 tracking-tight">
+            Ranking
+          </span>
+        </button>
+
+        {/* 3. Minhas Reservas */}
         <button
           type="button"
           onClick={() => onNavigateTab('historico')}
@@ -305,21 +321,7 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
           </span>
         </button>
 
-        {/* 3. Jogadores */}
-        <button
-          type="button"
-          onClick={() => onNavigateTab('members')}
-          className="bg-white hover:bg-slate-50 active:scale-[0.98] border border-slate-200 rounded-2xl p-4 sm:p-5 flex flex-col items-center justify-center text-center shadow-2xs transition-all cursor-pointer min-h-[96px] sm:min-h-[110px] group"
-        >
-          <div className="w-10 h-10 rounded-xl bg-[#0F172A] text-[#ccff00] flex items-center justify-center mb-2 group-hover:scale-105 transition-transform shadow-2xs">
-            <Users className="w-5 h-5" />
-          </div>
-          <span className="text-xs sm:text-sm font-extrabold text-slate-900 tracking-tight">
-            Jogadores
-          </span>
-        </button>
-
-        {/* 4. Meu Perfil */}
+        {/* 4. Perfil Esportivo */}
         <button
           type="button"
           onClick={() => onNavigateTab('profile')}
@@ -329,7 +331,7 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
             <User className="w-5 h-5" />
           </div>
           <span className="text-xs sm:text-sm font-extrabold text-slate-900 tracking-tight">
-            Meu perfil
+            Perfil Esportivo
           </span>
         </button>
 

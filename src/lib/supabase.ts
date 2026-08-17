@@ -1,32 +1,20 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-const getEnvVar = (name: string): string => {
-  if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env[name]) {
-    return String(import.meta.env[name]);
-  }
-  if (typeof process !== 'undefined' && process.env && process.env[name]) {
-    return String(process.env[name]);
-  }
-  return '';
+const supabaseUrl = typeof import.meta !== 'undefined' && import.meta.env ? (import.meta.env.VITE_SUPABASE_URL || '').trim() : '';
+const supabaseKey = typeof import.meta !== 'undefined' && import.meta.env ? (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || '').trim() : '';
+
+// Validar se ambas as variáveis de ambiente existem e estão no formato correto antes de inicializar o cliente
+export const isSupabaseConfigured = (): boolean => {
+  return (
+    Boolean(supabaseUrl) &&
+    Boolean(supabaseKey) &&
+    /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(supabaseUrl) &&
+    supabaseKey.length > 0
+  );
 };
 
-const rawUrl = getEnvVar('VITE_SUPABASE_URL').trim();
-const matchUrl = rawUrl.match(/https:\/\/[a-z0-9-]+\.supabase\.co/i);
-const url = matchUrl ? matchUrl[0] : rawUrl.replace(/\/rest\/v1\/?$/i, '').replace(/\/$/, '');
-
-const pubKey = getEnvVar('VITE_SUPABASE_PUBLISHABLE_KEY').trim();
-const anonKey = getEnvVar('VITE_SUPABASE_ANON_KEY').trim();
-const rawKey = pubKey || anonKey;
-const key = rawKey
-  .replace(/^(VITE_SUPABASE_PUBLISHABLE_KEY|VITE_SUPABASE_ANON_KEY)\s+/i, '')
-  .replace(/^['"]|['"]$/g, '')
-  .trim();
-
-export const isSupabaseConfigured = () =>
-  /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(url) && key.length > 0;
-
-export const supabase = isSupabaseConfigured()
-  ? createClient(url, key, {
+export const supabase: SupabaseClient | null = isSupabaseConfigured()
+  ? createClient(supabaseUrl, supabaseKey, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
@@ -35,7 +23,7 @@ export const supabase = isSupabaseConfigured()
     })
   : null;
 
-export const getSupabaseClient = () => supabase;
+export const getSupabaseClient = (): SupabaseClient | null => supabase;
 
 export interface SupabaseTestResult {
   success: boolean;

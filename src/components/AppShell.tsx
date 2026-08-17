@@ -5,9 +5,9 @@ import { toast } from '../lib/toast';
 import { formatLocation } from '../lib/location';
 import { GroupAvatar } from './GroupAvatar';
 import { NotificationCenter } from './NotificationCenter';
+import { JogarFlowModal } from './JogarFlowModal';
 import {
   Home,
-  Calendar,
   CalendarDays,
   CalendarCheck,
   Users,
@@ -29,7 +29,9 @@ import {
   Check,
   Tag,
   KeyRound,
-  Clock
+  Clock,
+  Trophy,
+  Swords
 } from 'lucide-react';
 
 interface AppShellProps {
@@ -60,6 +62,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [showAvatarMenu, setShowAvatarMenu] = useState(false);
   const [showMobileNotifications, setShowMobileNotifications] = useState(false);
+  const [showJogarModal, setShowJogarModal] = useState(false);
   const [notifications, setNotifications] = useState<Notificacao[]>([]);
   const [userGroups, setUserGroups] = useState<{ group: Grupo; member: any }[]>([]);
 
@@ -201,6 +204,27 @@ export const AppShell: React.FC<AppShellProps> = ({
 
               <button
                 type="button"
+                onClick={() => setShowJogarModal(true)}
+                className="px-3.5 py-1.5 rounded-xl text-xs font-black bg-[#ccff00] hover:bg-[#b8e600] text-slate-950 transition-all cursor-pointer flex items-center gap-1 shadow-sm"
+              >
+                <Swords className="w-3.5 h-3.5" />
+                <span>🎾 JOGAR</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab('ranking')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+                  activeTab === 'ranking'
+                    ? 'bg-slate-800 text-[#ccff00]'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-800/50'
+                }`}
+              >
+                Ranking
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setActiveTab('historico')}
                 className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
                   activeTab === 'historico'
@@ -314,7 +338,18 @@ export const AppShell: React.FC<AppShellProps> = ({
                       className="w-full text-left px-4 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2.5 cursor-pointer"
                     >
                       <User className="w-4 h-4 text-slate-500" />
-                      Meu Perfil
+                      Meu Perfil Esportivo
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setShowAvatarMenu(false);
+                        setActiveTab('ranking');
+                      }}
+                      className="w-full text-left px-4 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2.5 cursor-pointer"
+                    >
+                      <Trophy className="w-4 h-4 text-slate-500" />
+                      Ranking do Clube
                     </button>
 
                     <button
@@ -352,12 +387,12 @@ export const AppShell: React.FC<AppShellProps> = ({
         {children}
       </main>
 
-      {/* 3. MENU INFERIOR FIXO NO CELULAR (BOTTOM NAVIGATION < 768px) */}
+      {/* 3. MENU INFERIOR FIXO NO CELULAR (BOTTOM NAVIGATION < 768px COM BOTÃO CENTRAL "🎾 JOGAR") */}
       <nav
         className="fixed bottom-0 left-0 right-0 z-30 bg-[#0F172A] text-white border-t border-slate-800 shadow-2xl h-16 flex items-center justify-around px-2 select-none md:hidden"
         style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
       >
-        <div className="w-full max-w-md mx-auto grid grid-cols-4 items-center">
+        <div className="w-full max-w-md mx-auto grid grid-cols-5 items-center">
           
           {/* 1. INÍCIO */}
           <button
@@ -369,7 +404,7 @@ export const AppShell: React.FC<AppShellProps> = ({
             }`}
           >
             <Home className="w-5 h-5 mb-0.5" />
-            <span className="text-[11px] tracking-tight font-bold">Início</span>
+            <span className="text-[10px] tracking-tight font-bold">Início</span>
           </button>
 
           {/* 2. AGENDA */}
@@ -382,23 +417,38 @@ export const AppShell: React.FC<AppShellProps> = ({
             }`}
           >
             <CalendarDays className="w-5 h-5 mb-0.5" />
-            <span className="text-[11px] tracking-tight font-bold">Agenda</span>
+            <span className="text-[10px] tracking-tight font-bold">Agenda</span>
           </button>
 
-          {/* 3. RESERVAS */}
+          {/* 3. BOTÃO CENTRAL DE DESTAQUE: 🎾 JOGAR */}
           <button
             type="button"
-            onClick={() => setActiveTab('historico')}
-            aria-label="Reservas"
-            className={`flex flex-col items-center justify-center min-h-[48px] py-1 transition-colors cursor-pointer ${
-              activeTab === 'historico' ? 'text-[#ccff00] font-bold' : 'text-slate-400 hover:text-white'
-            }`}
+            onClick={() => setShowJogarModal(true)}
+            aria-label="Jogar"
+            className="flex flex-col items-center justify-center -mt-4 cursor-pointer group"
           >
-            <CalendarCheck className="w-5 h-5 mb-0.5" />
-            <span className="text-[11px] tracking-tight font-bold">Reservas</span>
+            <div className="w-12 h-12 rounded-2xl bg-[#ccff00] hover:bg-[#b8e600] text-slate-950 flex items-center justify-center shadow-lg transition-transform group-active:scale-95 border-2 border-[#0F172A]">
+              <Swords className="w-6 h-6" />
+            </div>
+            <span className="text-[9px] tracking-tight font-black text-[#ccff00] mt-0.5 uppercase">
+              Jogar
+            </span>
           </button>
 
-          {/* 4. PERFIL */}
+          {/* 4. RANKING */}
+          <button
+            type="button"
+            onClick={() => setActiveTab('ranking')}
+            aria-label="Ranking"
+            className={`flex flex-col items-center justify-center min-h-[48px] py-1 transition-colors cursor-pointer ${
+              activeTab === 'ranking' ? 'text-[#ccff00] font-bold' : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <Trophy className="w-5 h-5 mb-0.5" />
+            <span className="text-[10px] tracking-tight font-bold">Ranking</span>
+          </button>
+
+          {/* 5. PERFIL */}
           <button
             type="button"
             onClick={() => setActiveTab('profile')}
@@ -408,11 +458,26 @@ export const AppShell: React.FC<AppShellProps> = ({
             }`}
           >
             <User className="w-5 h-5 mb-0.5" />
-            <span className="text-[11px] tracking-tight font-bold">Perfil</span>
+            <span className="text-[10px] tracking-tight font-bold">Perfil</span>
           </button>
 
         </div>
       </nav>
+
+      {/* JOGAR FLOW MODAL */}
+      {showJogarModal && (
+        <JogarFlowModal
+          session={session}
+          isOpen={showJogarModal}
+          onClose={() => setShowJogarModal(false)}
+          onSuccess={() => {
+            const updatedMember = session.membros.find((m) => m.usuario_id === user?.id && m.grupo_id === activeGroup?.id);
+            if (user) {
+              DbService.loadSession(user.id).then((s) => onUpdateSession(s));
+            }
+          }}
+        />
+      )}
 
       {/* MODAL / SHEET: NOTIFICAÇÕES NO CELULAR */}
       {showMobileNotifications && (

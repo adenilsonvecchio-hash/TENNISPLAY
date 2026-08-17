@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 
 const url = process.env.VITE_SUPABASE_URL;
-const key = process.env.VITE_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+const key = process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
 console.log('--- SUPABASE PROJECT INFO ---');
 console.log('Host URL:', url);

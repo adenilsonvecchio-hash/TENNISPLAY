@@ -1,6 +1,7 @@
 import {
   AuthSession, CadastroJogadorData, CadastroProprietarioData, CourtConfig, DEFAULT_HORARIOS_PADRAO,
-  Grupo, MemberStatus, MembroGrupo, Notificacao, PerfilRole, PlayerClass, DEFAULT_PLAYER_CLASSES, Quadra, Reserva, TimeSlot, Usuario
+  Grupo, MemberStatus, MembroGrupo, Notificacao, PerfilRole, PlayerClass, DEFAULT_PLAYER_CLASSES, Quadra, Reserva, TimeSlot, Usuario,
+  Partida, PartidaSet, PartidaStatus, EstatisticasJogador, RankingJogador, FeedItem, DesempenhoMes, EstatisticasPorClasse
 } from '../types';
 import { getSupabaseClient } from './supabase';
 import { normalizeLocation } from './location';
@@ -270,6 +271,51 @@ async function mapReservation(row: any): Promise<Reserva> {
     jogador_nome: row.criador?.nome || '',
     jogador_classe: classFromDb(row.criador_classe),
     created_at: row.criado_em
+  };
+}
+
+async function mapMatch(row: any, currentUserId?: string): Promise<Partida> {
+  const sets: PartidaSet[] = (row.partida_sets || row.sets || []).map((s: any) => ({
+    id: s.id,
+    partida_id: s.partida_id,
+    numero_set: s.numero_set,
+    jogador_1_games: Number(s.jogador_1_games || 0),
+    jogador_2_games: Number(s.jogador_2_games || 0),
+    created_at: s.created_at || s.criado_em
+  })).sort((a: PartidaSet, b: PartidaSet) => a.numero_set - b.numero_set);
+
+  const likesList = row.partida_curtidas || [];
+  const curtidasCount = row.curtidas_count !== undefined ? row.curtidas_count : likesList.length;
+  const usuarioCurtiu = currentUserId ? likesList.some((c: any) => c.usuario_id === currentUserId) : false;
+
+  let parsedReserva: Reserva | undefined = undefined;
+  if (row.reserva) {
+    parsedReserva = await mapReservation(row.reserva);
+  }
+
+  return {
+    id: row.id,
+    grupo_id: row.grupo_id,
+    reserva_id: row.reserva_id,
+    jogador_1_id: row.jogador_1_id,
+    jogador_2_id: row.jogador_2_id,
+    status: (row.status || 'CONFIRMADA') as PartidaStatus,
+    resultado_informado_por: row.resultado_informado_por,
+    vencedor_id: row.vencedor_id,
+    foto_path: row.foto_path,
+    foto_url: row.foto_url,
+    detalhes_placar: row.detalhes_placar,
+    criado_em: row.criado_em,
+    finalizado_em: row.finalizado_em,
+    jogador_1: row.jogador_1 ? mapUser(row.jogador_1) : undefined,
+    jogador_2: row.jogador_2 ? mapUser(row.jogador_2) : undefined,
+    jogador_1_classe: row.jogador_1_membro?.classe ? classFromDb(row.jogador_1_membro.classe) : undefined,
+    jogador_2_classe: row.jogador_2_membro?.classe ? classFromDb(row.jogador_2_membro.classe) : undefined,
+    vencedor: row.vencedor ? mapUser(row.vencedor) : undefined,
+    reserva: parsedReserva,
+    sets,
+    curtidas_count: curtidasCount,
+    usuario_curtiu: usuarioCurtiu
   };
 }
 
@@ -1225,5 +1271,746 @@ export const DbService = {
     const db = requireDb();
     const { error } = await db.auth.signOut();
     if (error) fail('Erro ao sair', error);
+  },
+
+  // ==========================================
+  // MÓDULO DE PARTIDAS, RESULTADOS E PLACAR
+  // ==========================================
+
+  async createMatch(input: {
+    grupoId: string;
+    reservaId?: string;
+    jogador1Id: string;
+    jogador2Id: string;
+    status?: PartidaStatus;
+  }): Promise<Partida> {
+    const db = requireDb();
+    const status = input.status || 'CONFIRMADA';
+
+    const { data, error } = await db
+      .from('partidas')
+      .insert({
+        grupo_id: input.grupoId,
+        reserva_id: input.reservaId || null,
+        jogador_1_id: input.jogador1Id,
+        jogador_2_id: input.jogador2Id,
+        status: status
+      })
+      .select(`
+        *,
+        jogador_1:usuarios!partidas_jogador_1_id_fkey(*),
+        jogador_2:usuarios!partidas_jogador_2_id_fkey(*),
+        reserva:reservas(*, quadra:quadras(*), horario:horarios(*), criador:usuarios!reservas_criador_id_fkey(*), adversario:usuarios!reservas_adversario_id_fkey(*)),
+        partida_sets(*)
+      `)
+      .single();
+
+    if (error) {
+      console.error('[Supabase Create Match Error]:', error);
+      fail('Erro ao criar partida', error);
+    }
+
+    // Criar notificação para o adversário convidado
+    try {
+      const { data: creatorUser } = await db.from('usuarios').select('nome').eq('id', input.jogador1Id).single();
+      const creatorName = creatorUser?.nome || 'Um jogador';
+      await this.createNotification(
+        input.grupoId,
+        input.jogador2Id,
+        'Novo Jogo Marcado! 🎾',
+        `${creatorName} marcou uma partida com você. Confira na sua agenda.`,
+        'PARTIDA_CRIADA'
+      );
+    } catch (notifErr) {
+      console.warn('Erro ao disparar notificação de partida:', notifErr);
+    }
+
+    return mapMatch(data, input.jogador1Id);
+  },
+
+  async getMatchesForGroup(groupId: string, currentUserId?: string): Promise<Partida[]> {
+    const db = requireDb();
+    const { data, error } = await db
+      .from('partidas')
+      .select(`
+        *,
+        jogador_1:usuarios!partidas_jogador_1_id_fkey(*),
+        jogador_2:usuarios!partidas_jogador_2_id_fkey(*),
+        vencedor:usuarios!partidas_vencedor_id_fkey(*),
+        reserva:reservas(*, quadra:quadras(*), horario:horarios(*), criador:usuarios!reservas_criador_id_fkey(*), adversario:usuarios!reservas_adversario_id_fkey(*)),
+        partida_sets(*),
+        partida_curtidas(id, usuario_id)
+      `)
+      .eq('grupo_id', groupId)
+      .order('criado_em', { ascending: false });
+
+    if (error) {
+      console.error('[Supabase getMatchesForGroup Error]:', error);
+      fail('Erro ao carregar partidas do grupo', error);
+    }
+
+    return Promise.all((data || []).map((row) => mapMatch(row, currentUserId)));
+  },
+
+  async getMatchesForUser(userId: string, groupId?: string): Promise<Partida[]> {
+    const db = requireDb();
+    let query = db
+      .from('partidas')
+      .select(`
+        *,
+        jogador_1:usuarios!partidas_jogador_1_id_fkey(*),
+        jogador_2:usuarios!partidas_jogador_2_id_fkey(*),
+        vencedor:usuarios!partidas_vencedor_id_fkey(*),
+        reserva:reservas(*, quadra:quadras(*), horario:horarios(*), criador:usuarios!reservas_criador_id_fkey(*), adversario:usuarios!reservas_adversario_id_fkey(*)),
+        partida_sets(*),
+        partida_curtidas(id, usuario_id)
+      `)
+      .or(`jogador_1_id.eq.${userId},jogador_2_id.eq.${userId}`)
+      .order('criado_em', { ascending: false });
+
+    if (groupId) {
+      query = query.eq('grupo_id', groupId);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      console.error('[Supabase getMatchesForUser Error]:', error);
+      fail('Erro ao carregar partidas do usuário', error);
+    }
+
+    return Promise.all((data || []).map((row) => mapMatch(row, userId)));
+  },
+
+  async getMatchById(matchId: string, currentUserId?: string): Promise<Partida | null> {
+    const db = requireDb();
+    const { data, error } = await db
+      .from('partidas')
+      .select(`
+        *,
+        jogador_1:usuarios!partidas_jogador_1_id_fkey(*),
+        jogador_2:usuarios!partidas_jogador_2_id_fkey(*),
+        vencedor:usuarios!partidas_vencedor_id_fkey(*),
+        reserva:reservas(*, quadra:quadras(*), horario:horarios(*), criador:usuarios!reservas_criador_id_fkey(*), adversario:usuarios!reservas_adversario_id_fkey(*)),
+        partida_sets(*),
+        partida_curtidas(id, usuario_id)
+      `)
+      .eq('id', matchId)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[Supabase getMatchById Error]:', error);
+      fail('Erro ao carregar detalhes da partida', error);
+    }
+
+    if (!data) return null;
+    return mapMatch(data, currentUserId);
+  },
+
+  async submitMatchScore(input: {
+    matchId: string;
+    userId: string;
+    sets: { numero_set: number; jogador_1_games: number; jogador_2_games: number }[];
+    fotoUrl?: string;
+    fotoPath?: string;
+    isAdminOrOwner?: boolean;
+  }): Promise<{ status: PartidaStatus; vencedorId: string; placar: string }> {
+    const db = requireDb();
+
+    // Tentar executar via RPC segura
+    try {
+      const { data: rpcData, error: rpcError } = await db.rpc('salvar_resultado_partida', {
+        p_partida_id: input.matchId,
+        p_sets: input.sets,
+        p_foto_url: input.fotoUrl || null,
+        p_foto_path: input.fotoPath || null
+      });
+
+      if (!rpcError && rpcData) {
+        return {
+          status: rpcData.status as PartidaStatus,
+          vencedorId: rpcData.vencedor_id,
+          placar: rpcData.placar
+        };
+      }
+      if (rpcError) {
+        console.warn('RPC salvar_resultado_partida falhou, tentando fallback direto:', rpcError.message);
+      }
+    } catch (err) {
+      console.warn('Erro ao chamar RPC salvar_resultado_partida, usando fallback:', err);
+    }
+
+    // Fallback Direto Seguro no banco
+    const { data: match, error: fetchErr } = await db
+      .from('partidas')
+      .select('id, grupo_id, jogador_1_id, jogador_2_id, status')
+      .eq('id', input.matchId)
+      .single();
+
+    if (fetchErr || !match) fail('Partida não encontrada para registrar placar', fetchErr);
+
+    let setsJ1 = 0;
+    let setsJ2 = 0;
+    const placarParts: string[] = [];
+
+    // Limpar sets anteriores
+    await db.from('partida_sets').delete().eq('partida_id', input.matchId);
+
+    for (const s of input.sets) {
+      await db.from('partida_sets').insert({
+        partida_id: input.matchId,
+        numero_set: s.numero_set,
+        jogador_1_games: s.jogador_1_games,
+        jogador_2_games: s.jogador_2_games
+      });
+
+      if (s.jogador_1_games > s.jogador_2_games) setsJ1++;
+      else if (s.jogador_2_games > s.jogador_1_games) setsJ2++;
+
+      placarParts.push(`${s.jogador_1_games}x${s.jogador_2_games}`);
+    }
+
+    const vencedorId = setsJ1 > setsJ2 ? match.jogador_1_id : match.jogador_2_id;
+    const placarStr = placarParts.join(' / ');
+    const newStatus: PartidaStatus = input.isAdminOrOwner ? 'FINALIZADA' : 'AGUARDANDO_CONFIRMACAO_RESULTADO';
+
+    const { error: updateErr } = await db
+      .from('partidas')
+      .update({
+        status: newStatus,
+        resultado_informado_por: input.userId,
+        vencedor_id: vencedorId,
+        detalhes_placar: placarStr,
+        foto_url: input.fotoUrl || null,
+        foto_path: input.fotoPath || null,
+        finalizado_em: input.isAdminOrOwner ? new Date().toISOString() : null
+      })
+      .eq('id', input.matchId);
+
+    if (updateErr) fail('Erro ao salvar resultado da partida', updateErr);
+
+    // Notificar adversário se não for admin
+    if (!input.isAdminOrOwner) {
+      const otherPlayerId = match.jogador_1_id === input.userId ? match.jogador_2_id : match.jogador_1_id;
+      const { data: reporter } = await db.from('usuarios').select('nome').eq('id', input.userId).single();
+      const authorName = reporter?.nome || 'Seu adversário';
+
+      await this.createNotification(
+        match.grupo_id,
+        otherPlayerId,
+        'Resultado Informado 🎾',
+        `${authorName} informou o placar (${placarStr}). Toque para conferir e confirmar.`,
+        'RESULTADO_INFORMADO'
+      );
+    }
+
+    return {
+      status: newStatus,
+      vencedorId,
+      placar: placarStr
+    };
+  },
+
+  async confirmMatchResult(matchId: string, userId: string, isAdminOrOwner = false): Promise<void> {
+    const db = requireDb();
+
+    try {
+      const { data: rpcData, error: rpcError } = await db.rpc('confirmar_resultado_partida', {
+        p_partida_id: matchId
+      });
+
+      if (!rpcError && rpcData) return;
+      if (rpcError) console.warn('RPC confirmar_resultado_partida falhou, usando fallback direto:', rpcError.message);
+    } catch (err) {
+      console.warn('Erro ao chamar RPC confirmar_resultado_partida:', err);
+    }
+
+    // Fallback Direto
+    const { data: match, error: fetchErr } = await db
+      .from('partidas')
+      .select('id, grupo_id, jogador_1_id, jogador_2_id, resultado_informado_por, detalhes_placar')
+      .eq('id', matchId)
+      .single();
+
+    if (fetchErr || !match) fail('Partida não encontrada para confirmação', fetchErr);
+
+    if (!isAdminOrOwner && match.resultado_informado_por === userId) {
+      throw new Error('A confirmação deve ser realizada pelo adversário.');
+    }
+
+    const { error: updateErr } = await db
+      .from('partidas')
+      .update({
+        status: 'FINALIZADA',
+        finalizado_em: new Date().toISOString()
+      })
+      .eq('id', matchId);
+
+    if (updateErr) fail('Erro ao confirmar resultado da partida', updateErr);
+
+    if (match.resultado_informado_por && match.resultado_informado_por !== userId) {
+      const { data: confirmer } = await db.from('usuarios').select('nome').eq('id', userId).single();
+      const confirmerName = confirmer?.nome || 'Seu adversário';
+
+      await this.createNotification(
+        match.grupo_id,
+        match.resultado_informado_por,
+        'Resultado Confirmado! 🏆',
+        `${confirmerName} confirmou o placar da partida. Suas estatísticas foram atualizadas.`,
+        'RESULTADO_CONFIRMADO'
+      );
+    }
+  },
+
+  async requestScoreCorrection(matchId: string, userId: string, motivo?: string): Promise<void> {
+    const db = requireDb();
+
+    try {
+      const { data: rpcData, error: rpcError } = await db.rpc('solicitar_correcao_partida', {
+        p_partida_id: matchId,
+        p_motivo: motivo || null
+      });
+
+      if (!rpcError && rpcData) return;
+      if (rpcError) console.warn('RPC solicitar_correcao_partida falhou, usando fallback direto:', rpcError.message);
+    } catch (err) {
+      console.warn('Erro ao chamar RPC solicitar_correcao_partida:', err);
+    }
+
+    // Fallback Direto
+    const { data: match, error: fetchErr } = await db
+      .from('partidas')
+      .select('id, grupo_id, jogador_1_id, jogador_2_id, resultado_informado_por')
+      .eq('id', matchId)
+      .single();
+
+    if (fetchErr || !match) fail('Partida não encontrada para solicitação de correção', fetchErr);
+
+    const { error: updateErr } = await db
+      .from('partidas')
+      .update({
+        status: 'AGUARDANDO_RESULTADO',
+        resultado_informado_por: null
+      })
+      .eq('id', matchId);
+
+    if (updateErr) fail('Erro ao solicitar correção', updateErr);
+
+    if (match.resultado_informado_por && match.resultado_informado_por !== userId) {
+      const { data: requester } = await db.from('usuarios').select('nome').eq('id', userId).single();
+      const reqName = requester?.nome || 'Seu adversário';
+
+      await this.createNotification(
+        match.grupo_id,
+        match.resultado_informado_por,
+        'Correção de Placar Solicitada ⚠️',
+        `${reqName} contestou o resultado informado. Por favor, reenvie o placar correto.`,
+        'CORRECAO_SOLICITADA'
+      );
+    }
+  },
+
+  async cancelMatch(matchId: string, userId: string): Promise<void> {
+    const db = requireDb();
+    const { data: match } = await db.from('partidas').select('id, status, reserva_id').eq('id', matchId).single();
+    if (!match) return;
+
+    await db.from('partidas').update({ status: 'CANCELADA' }).eq('id', matchId);
+
+    // Se houver reserva associada e ainda estiver ativa, cancelar também
+    if (match.reserva_id) {
+      try {
+        await this.cancelBooking(match.reserva_id, userId, 'JOGADOR');
+      } catch (err) {
+        console.warn('Reserva já cancelada ou não foi possível cancelar em cascata:', err);
+      }
+    }
+  },
+
+  // ==========================================
+  // STORAGE & FOTOS (SUPABASE STORAGE)
+  // ==========================================
+
+  async uploadMatchPhoto(file: File, groupId: string, matchId: string): Promise<{ publicUrl: string; path: string }> {
+    const db = requireDb();
+    const fileExt = file.name.split('.').pop() || 'jpg';
+    const filePath = `${groupId}/${matchId}_${Date.now()}.${fileExt}`;
+
+    const { error: uploadError } = await db.storage
+      .from('match-photos')
+      .upload(filePath, file, {
+        cacheControl: '3600',
+        upsert: true
+      });
+
+    if (uploadError) {
+      console.error('[Supabase Storage match-photos Upload Error]:', uploadError);
+      fail('Erro ao fazer upload da foto da partida', uploadError);
+    }
+
+    const { data: urlData } = db.storage.from('match-photos').getPublicUrl(filePath);
+    return {
+      publicUrl: urlData.publicUrl,
+      path: filePath
+    };
+  },
+
+  async uploadUserAvatar(file: File, userId: string): Promise<{ publicUrl: string; path: string }> {
+    const db = requireDb();
+    const fileExt = file.name.split('.').pop() || 'jpg';
+    const filePath = `${userId}/${Date.now()}.${fileExt}`;
+
+    const { error: uploadError } = await db.storage
+      .from('avatars')
+      .upload(filePath, file, {
+        cacheControl: '3600',
+        upsert: true
+      });
+
+    if (uploadError) {
+      console.error('[Supabase Storage avatars Upload Error]:', uploadError);
+      fail('Erro ao fazer upload do avatar', uploadError);
+    }
+
+    const { data: urlData } = db.storage.from('avatars').getPublicUrl(filePath);
+    return {
+      publicUrl: urlData.publicUrl,
+      path: filePath
+    };
+  },
+
+  // ==========================================
+  // ESTATÍSTICAS ESPORTIVAS E RANKING
+  // ==========================================
+
+  async getPlayerStatistics(userId: string, groupId: string): Promise<EstatisticasJogador> {
+    const db = requireDb();
+
+    // Carregar todas as partidas finalizadas do usuário no grupo
+    const { data: matches, error } = await db
+      .from('partidas')
+      .select(`
+        *,
+        jogador_1:usuarios!partidas_jogador_1_id_fkey(*),
+        jogador_2:usuarios!partidas_jogador_2_id_fkey(*),
+        vencedor:usuarios!partidas_vencedor_id_fkey(*),
+        partida_sets(*)
+      `)
+      .eq('grupo_id', groupId)
+      .eq('status', 'FINALIZADA')
+      .or(`jogador_1_id.eq.${userId},jogador_2_id.eq.${userId}`)
+      .order('criado_em', { ascending: false });
+
+    if (error) {
+      console.error('[Supabase getPlayerStatistics Error]:', error);
+      fail('Erro ao calcular estatísticas do jogador', error);
+    }
+
+    // Carregar classes dos membros do grupo para estatística por classe
+    const { data: members } = await db
+      .from('membros_grupo')
+      .select('usuario_id, classe')
+      .eq('grupo_id', groupId);
+
+    const memberClassMap = new Map<string, PlayerClass>();
+    (members || []).forEach((m: any) => {
+      memberClassMap.set(m.usuario_id, classFromDb(m.classe));
+    });
+
+    const totalPartidas = (matches || []).length;
+    let vitorias = 0;
+    let derrotas = 0;
+    let setsVencidos = 0;
+    let setsPerdidos = 0;
+    let gamesVencidos = 0;
+    let gamesPerdidos = 0;
+
+    // Sequência atual e maior sequência
+    let sequenciaAtual = 0;
+    let maiorSequencia = 0;
+    let seqContador = 0;
+
+    // Map por classe do adversário
+    const classStatsMap: Record<string, { vitorias: number; derrotas: number }> = {};
+    DEFAULT_PLAYER_CLASSES.forEach((cls) => {
+      classStatsMap[cls] = { vitorias: 0, derrotas: 0 };
+    });
+
+    // Desempenho por mês no ano atual
+    const currentYear = new Date().getFullYear();
+    const mesesNomes = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    const mesesStats: DesempenhoMes[] = mesesNomes.map((mes, idx) => ({
+      mes,
+      mesNumero: idx + 1,
+      vitorias: 0,
+      derrotas: 0,
+      total: 0
+    }));
+
+    // Partidas ordenadas cronologicamente para calcular sequências
+    const chronological = [...(matches || [])].reverse();
+
+    chronological.forEach((m: any) => {
+      const isWinner = m.vencedor_id === userId;
+      if (isWinner) {
+        seqContador++;
+        if (seqContador > maiorSequencia) maiorSequencia = seqContador;
+      } else {
+        seqContador = 0;
+      }
+    });
+
+    // Sequência atual (a partir do jogo mais recente)
+    for (const m of matches || []) {
+      if (m.vencedor_id === userId) {
+        sequenciaAtual++;
+      } else {
+        break;
+      }
+    }
+
+    (matches || []).forEach((m: any) => {
+      const isJ1 = m.jogador_1_id === userId;
+      const isWinner = m.vencedor_id === userId;
+      const opponentId = isJ1 ? m.jogador_2_id : m.jogador_1_id;
+      const opponentClass = memberClassMap.get(opponentId) || 'Sem Classe';
+
+      if (isWinner) {
+        vitorias++;
+      } else {
+        derrotas++;
+      }
+
+      // Estatística por classe do adversário
+      if (opponentClass && classStatsMap[opponentClass]) {
+        if (isWinner) classStatsMap[opponentClass].vitorias++;
+        else classStatsMap[opponentClass].derrotas++;
+      }
+
+      // Sets e games
+      const sets = m.partida_sets || [];
+      sets.forEach((s: any) => {
+        const myGames = isJ1 ? Number(s.jogador_1_games || 0) : Number(s.jogador_2_games || 0);
+        const oppGames = isJ1 ? Number(s.jogador_2_games || 0) : Number(s.jogador_1_games || 0);
+
+        gamesVencidos += myGames;
+        gamesPerdidos += oppGames;
+
+        if (myGames > oppGames) {
+          setsVencidos++;
+        } else if (oppGames > myGames) {
+          setsPerdidos++;
+        }
+      });
+
+      // Mês
+      const matchDate = new Date(m.criado_em || m.finalizado_em);
+      if (matchDate.getFullYear() === currentYear) {
+        const monthIdx = matchDate.getMonth();
+        if (monthIdx >= 0 && monthIdx < 12) {
+          mesesStats[monthIdx].total++;
+          if (isWinner) mesesStats[monthIdx].vitorias++;
+          else mesesStats[monthIdx].derrotas++;
+        }
+      }
+    });
+
+    // Últimos 5 e 10 jogos
+    const last5 = (matches || []).slice(0, 5);
+    const last10 = (matches || []).slice(0, 10);
+    const vitoriasUltimos5 = last5.filter((m: any) => m.vencedor_id === userId).length;
+    const vitoriasUltimos10 = last10.filter((m: any) => m.vencedor_id === userId).length;
+
+    const aproveitamento = totalPartidas > 0 ? Math.round((vitorias / totalPartidas) * 100) : 0;
+    const saldoGames = gamesVencidos - gamesPerdidos;
+
+    const porClasse: EstatisticasPorClasse[] = DEFAULT_PLAYER_CLASSES.map((cls) => {
+      const stats = classStatsMap[cls] || { vitorias: 0, derrotas: 0 };
+      const tot = stats.vitorias + stats.derrotas;
+      const simple = cls.replace(/^Classe\s+/i, '').replace(/[()º]/g, '').trim();
+      return {
+        classe: cls,
+        classeSimples: simple,
+        vitorias: stats.vitorias,
+        derrotas: stats.derrotas,
+        total: tot,
+        aproveitamento: tot > 0 ? Math.round((stats.vitorias / tot) * 100) : 0
+      };
+    }).filter((c) => c.total > 0);
+
+    return {
+      totalPartidas,
+      vitorias,
+      derrotas,
+      aproveitamento,
+      setsVencidos,
+      setsPerdidos,
+      gamesVencidos,
+      gamesPerdidos,
+      saldoGames,
+      sequenciaAtual,
+      maiorSequenciaVitorias: maiorSequencia,
+      vitoriasUltimos5,
+      totalUltimos5: last5.length,
+      vitoriasUltimos10,
+      totalUltimos10: last10.length,
+      porClasse,
+      desempenhoAnual: mesesStats
+    };
+  },
+
+  async getGroupRanking(groupId: string): Promise<RankingJogador[]> {
+    const db = requireDb();
+
+    // 1. Obter membros ativos do grupo
+    const { data: members, error: memErr } = await db
+      .from('membros_grupo')
+      .select('*, usuario:usuarios(*)')
+      .eq('grupo_id', groupId)
+      .eq('status', 'ativo');
+
+    if (memErr) fail('Erro ao carregar ranking do grupo', memErr);
+
+    // 2. Obter todas as partidas finalizadas do grupo
+    const { data: matches, error: matchErr } = await db
+      .from('partidas')
+      .select('id, jogador_1_id, jogador_2_id, vencedor_id')
+      .eq('grupo_id', groupId)
+      .eq('status', 'FINALIZADA');
+
+    if (matchErr) fail('Erro ao carregar histórico para o ranking', matchErr);
+
+    const statsByUser: Record<string, { partidas: number; vitorias: number; derrotas: number }> = {};
+    (members || []).forEach((m: any) => {
+      statsByUser[m.usuario_id] = { partidas: 0, vitorias: 0, derrotas: 0 };
+    });
+
+    (matches || []).forEach((m: any) => {
+      if (statsByUser[m.jogador_1_id]) {
+        statsByUser[m.jogador_1_id].partidas++;
+        if (m.vencedor_id === m.jogador_1_id) statsByUser[m.jogador_1_id].vitorias++;
+        else statsByUser[m.jogador_1_id].derrotas++;
+      }
+      if (statsByUser[m.jogador_2_id]) {
+        statsByUser[m.jogador_2_id].partidas++;
+        if (m.vencedor_id === m.jogador_2_id) statsByUser[m.jogador_2_id].vitorias++;
+        else statsByUser[m.jogador_2_id].derrotas++;
+      }
+    });
+
+    const rankingItems: RankingJogador[] = (members || [])
+      .filter((m: any) => m.usuario)
+      .map((m: any) => {
+        const stats = statsByUser[m.usuario_id] || { partidas: 0, vitorias: 0, derrotas: 0 };
+        const aproveitamento = stats.partidas > 0 ? Math.round((stats.vitorias / stats.partidas) * 100) : 0;
+        // Sistema de pontos: 3 pontos por vitória, 1 ponto por partida jogada
+        const pontos = stats.vitorias * 3 + stats.partidas * 1;
+
+        return {
+          posicao: 0,
+          usuario: mapUser(m.usuario),
+          membro: mapMember(m),
+          classe: classFromDb(m.classe),
+          partidas: stats.partidas,
+          vitorias: stats.vitorias,
+          derrotas: stats.derrotas,
+          aproveitamento,
+          pontos
+        };
+      });
+
+    // Ordenar por pontos DESC, vitorias DESC, aproveitamento DESC, nome ASC
+    rankingItems.sort((a, b) => {
+      if (b.pontos !== a.pontos) return b.pontos - a.pontos;
+      if (b.vitorias !== a.vitorias) return b.vitorias - a.vitorias;
+      if (b.aproveitamento !== a.aproveitamento) return b.aproveitamento - a.aproveitamento;
+      return a.usuario.nome.localeCompare(b.usuario.nome);
+    });
+
+    // Atribuir posição
+    rankingItems.forEach((item, index) => {
+      item.posicao = index + 1;
+    });
+
+    return rankingItems;
+  },
+
+  async getGroupFeed(groupId: string, currentUserId?: string): Promise<FeedItem[]> {
+    const db = requireDb();
+    const { data: matches, error } = await db
+      .from('partidas')
+      .select(`
+        *,
+        jogador_1:usuarios!partidas_jogador_1_id_fkey(*),
+        jogador_2:usuarios!partidas_jogador_2_id_fkey(*),
+        vencedor:usuarios!partidas_vencedor_id_fkey(*),
+        reserva:reservas(*, quadra:quadras(*), horario:horarios(*), criador:usuarios!reservas_criador_id_fkey(*), adversario:usuarios!reservas_adversario_id_fkey(*)),
+        partida_sets(*),
+        partida_curtidas(id, usuario_id)
+      `)
+      .eq('grupo_id', groupId)
+      .eq('status', 'FINALIZADA')
+      .order('criado_em', { ascending: false })
+      .limit(30);
+
+    if (error) {
+      console.error('[Supabase getGroupFeed Error]:', error);
+      fail('Erro ao carregar feed do grupo', error);
+    }
+
+    const items: FeedItem[] = await Promise.all((matches || []).map(async (row) => {
+      const match = await mapMatch(row, currentUserId);
+      const j1 = match.jogador_1 || { id: match.jogador_1_id, nome: 'Jogador 1', email: '', whatsapp: '', foto_url: null, created_at: '' };
+      const j2 = match.jogador_2 || { id: match.jogador_2_id, nome: 'Jogador 2', email: '', whatsapp: '', foto_url: null, created_at: '' };
+
+      const setsPlacar = match.sets && match.sets.length > 0
+        ? match.sets.map((s) => `${s.jogador_1_games}x${s.jogador_2_games}`).join(' · ')
+        : match.detalhes_placar || 'Resultado finalizado';
+
+      const dataStr = match.reserva?.data
+        ? match.reserva.data.split('-').reverse().join('/')
+        : new Date(match.criado_em).toLocaleDateString('pt-BR');
+
+      const quadraStr = match.reserva?.quadra_numero ? `Quadra ${match.reserva.quadra_numero}` : 'Quadra Principal';
+
+      return {
+        partida: match,
+        autor: j1,
+        adversario: j2,
+        resultadoTexto: setsPlacar,
+        dataTexto: dataStr,
+        quadraTexto: quadraStr,
+        fotoUrl: match.foto_url,
+        curtidas: match.curtidas_count || 0,
+        curtidoPeloUsuario: match.usuario_curtiu || false
+      };
+    }));
+
+    return items;
+  },
+
+  async toggleFeedLike(matchId: string, userId: string): Promise<{ liked: boolean; count: number }> {
+    const db = requireDb();
+    const { data: existing } = await db
+      .from('partida_curtidas')
+      .select('id')
+      .eq('partida_id', matchId)
+      .eq('usuario_id', userId)
+      .maybeSingle();
+
+    if (existing) {
+      await db.from('partida_curtidas').delete().eq('id', existing.id);
+    } else {
+      await db.from('partida_curtidas').insert({ partida_id: matchId, usuario_id: userId });
+    }
+
+    const { count } = await db
+      .from('partida_curtidas')
+      .select('id', { count: 'exact', head: true })
+      .eq('partida_id', matchId);
+
+    return {
+      liked: !existing,
+      count: count || 0
+    };
   }
 };

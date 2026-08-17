@@ -109,7 +109,118 @@ export type NotificacaoType =
   | 'RESERVA_CANCELADA'
   | 'SOLICITACAO_APROVADA'
   | 'SOLICITACAO_RECUSADA'
-  | 'CLASSE_ALTERADA';
+  | 'CLASSE_ALTERADA'
+  | 'PARTIDA_CRIADA'
+  | 'RESULTADO_INFORMADO'
+  | 'RESULTADO_CONFIRMADO'
+  | 'CORRECAO_SOLICITADA';
+
+export type PartidaStatus =
+  | 'AGUARDANDO_ADV'
+  | 'CONFIRMADA'
+  | 'REALIZADA'
+  | 'AGUARDANDO_RESULTADO'
+  | 'AGUARDANDO_CONFIRMACAO_RESULTADO'
+  | 'FINALIZADA'
+  | 'CANCELADA';
+
+export interface PartidaSet {
+  id?: string;
+  partida_id?: string;
+  numero_set: number;
+  jogador_1_games: number;
+  jogador_2_games: number;
+  created_at?: string;
+}
+
+export interface Partida {
+  id: string;
+  grupo_id: string;
+  reserva_id?: string | null;
+  jogador_1_id: string;
+  jogador_2_id: string;
+  status: PartidaStatus;
+  resultado_informado_por?: string | null;
+  vencedor_id?: string | null;
+  foto_path?: string | null;
+  foto_url?: string | null;
+  detalhes_placar?: string | null;
+  criado_em: string;
+  finalizado_em?: string | null;
+  
+  // Relações carregadas
+  jogador_1?: Usuario;
+  jogador_2?: Usuario;
+  jogador_1_classe?: PlayerClass;
+  jogador_2_classe?: PlayerClass;
+  vencedor?: Usuario;
+  reserva?: Reserva;
+  sets?: PartidaSet[];
+  curtidas_count?: number;
+  usuario_curtiu?: boolean;
+}
+
+export interface EstatisticasPorClasse {
+  classe: PlayerClass;
+  classeSimples: string;
+  vitorias: number;
+  derrotas: number;
+  total: number;
+  aproveitamento: number;
+}
+
+export interface DesempenhoMes {
+  mes: string; // "Jan", "Fev", "Mar", etc.
+  mesNumero: number; // 1..12
+  vitorias: number;
+  derrotas: number;
+  total: number;
+}
+
+export interface EstatisticasJogador {
+  totalPartidas: number;
+  vitorias: number;
+  derrotas: number;
+  aproveitamento: number; // 0..100
+  setsVencidos: number;
+  setsPerdidos: number;
+  gamesVencidos: number;
+  gamesPerdidos: number;
+  saldoGames: number;
+  sequenciaAtual: number;
+  maiorSequenciaVitorias: number;
+  vitoriasUltimos5: number;
+  totalUltimos5: number;
+  vitoriasUltimos10: number;
+  totalUltimos10: number;
+  porClasse: EstatisticasPorClasse[];
+  desempenhoAnual: DesempenhoMes[];
+  rankingPosicao?: number;
+}
+
+export interface RankingJogador {
+  posicao: number;
+  usuario: Usuario;
+  membro: MembroGrupo;
+  classe: PlayerClass;
+  partidas: number;
+  vitorias: number;
+  derrotas: number;
+  aproveitamento: number;
+  pontos: number;
+}
+
+export interface FeedItem {
+  partida: Partida;
+  autor: Usuario;
+  adversario: Usuario;
+  resultadoTexto: string;
+  dataTexto: string;
+  quadraTexto: string;
+  fotoUrl?: string | null;
+  curtidas: number;
+  curtidoPeloUsuario: boolean;
+}
 
 export interface Notificacao {
   id: string;
