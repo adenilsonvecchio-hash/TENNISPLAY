@@ -243,9 +243,12 @@ CREATE TRIGGER trg_validar_update_membros_grupo
   FOR EACH ROW EXECUTE FUNCTION public.validar_update_membros_grupo();
 
 -- 13. RPC Segura: alterar_classe_jogador
+DROP FUNCTION IF EXISTS public.alterar_classe_jogador(UUID, UUID, TEXT);
+DROP FUNCTION IF EXISTS public.alterar_classe_jogador;
+
 CREATE OR REPLACE FUNCTION public.alterar_classe_jogador(
-  p_membro_id UUID,
   p_grupo_id UUID,
+  p_membro_id UUID,
   p_nova_classe TEXT
 )
 RETURNS JSONB
@@ -259,24 +262,33 @@ DECLARE
   v_classe_normalizada TEXT;
   v_is_owner BOOLEAN;
 BEGIN
+  -- 1. Validar autenticação
   IF v_user_id IS NULL THEN
-    RAISE EXCEPTION 'Acesso não autorizado: usuário não autenticado.';
+    RAISE EXCEPTION 'Usuário não autenticado.';
   END IF;
 
+  -- 2. Validar existência do grupo
+  IF NOT EXISTS (SELECT 1 FROM public.grupos WHERE id = p_grupo_id) THEN
+    RAISE EXCEPTION 'Grupo não encontrado.';
+  END IF;
+
+  -- 3. Validar permissão do proprietário
+  v_is_owner := public.e_proprietario_do_grupo(p_grupo_id);
+  IF NOT v_is_owner THEN
+    RAISE EXCEPTION 'Somente o proprietário do grupo pode alterar a classe dos jogadores.';
+  END IF;
+
+  -- 4. Validar se o jogador pertence ao grupo
   SELECT * INTO v_membro
   FROM public.membros_grupo
   WHERE (id = p_membro_id OR usuario_id = p_membro_id) AND grupo_id = p_grupo_id;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Jogador não encontrado no grupo especificado.';
+    RAISE EXCEPTION 'Jogador não encontrado neste grupo.';
   END IF;
 
-  v_is_owner := public.e_proprietario_do_grupo(p_grupo_id);
-  IF NOT v_is_owner THEN
-    RAISE EXCEPTION 'Apenas o proprietário do grupo pode alterar a classe dos jogadores.';
-  END IF;
-
-  IF p_nova_classe IS NULL OR TRIM(p_nova_classe) = '' OR UPPER(TRIM(p_nova_classe)) = 'SEM CLASSE' OR UPPER(TRIM(p_nova_classe)) = 'NULL' THEN
+  -- 5. Normalizar e validar a classe
+  IF p_nova_classe IS NULL OR TRIM(p_nova_classe) = '' OR UPPER(TRIM(p_nova_classe)) IN ('SEM CLASSE', 'NULL', 'UNDEFINED') THEN
     v_classe_normalizada := NULL;
   ELSE
     IF UPPER(TRIM(p_nova_classe)) IN ('A', 'CLASSE A', 'CLASSE A (1º)') OR p_nova_classe ILIKE '%A (1º)%' THEN
@@ -299,28 +311,42 @@ BEGIN
       v_classe_normalizada := 'JUVENIL';
     ELSIF UPPER(TRIM(p_nova_classe)) IN ('50+', 'CLASSE 50+', 'CLASSE (50+)') OR p_nova_classe ILIKE '%50+%' THEN
       v_classe_normalizada := '50+';
+    ELSIF UPPER(TRIM(p_nova_classe)) IN ('1', '2', '3', '4', '5', '6', '7') THEN
+      v_classe_normalizada := CASE TRIM(p_nova_classe)
+        WHEN '1' THEN 'A'
+        WHEN '2' THEN 'B'
+        WHEN '3' THEN 'C'
+        WHEN '4' THEN 'D'
+        WHEN '5' THEN 'E'
+        WHEN '6' THEN 'F'
+        WHEN '7' THEN 'G'
+      END;
     ELSE
       RAISE EXCEPTION 'Classe inválida informada: %', p_nova_classe;
     END IF;
   END IF;
 
+  -- 6. Atualizar exclusivamente a coluna classe
   UPDATE public.membros_grupo
   SET classe = v_classe_normalizada
   WHERE id = v_membro.id;
 
   RETURN jsonb_build_object(
     'success', TRUE,
+    'id', v_membro.id,
     'membro_id', v_membro.id,
     'usuario_id', v_membro.usuario_id,
     'grupo_id', v_membro.grupo_id,
     'classe', v_classe_normalizada,
-    'mensagem', 'Classe atualizada com sucesso pelo proprietário.'
+    'mensagem', 'Classe do jogador atualizada com sucesso.'
   );
 END;
 $$;
 
-REVOKE EXECUTE ON FUNCTION public.alterar_classe_jogador(UUID, UUID, TEXT) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.alterar_classe_jogador(UUID, UUID, TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.alterar_classe_jogador(UUID, UUID, TEXT) FROM anon;
 GRANT EXECUTE ON FUNCTION public.alterar_classe_jogador(UUID, UUID, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.alterar_classe_jogador(UUID, UUID, TEXT) TO service_role;
 
 -- 14. RPC Atômica e Segura: criar_reserva
 CREATE OR REPLACE FUNCTION public.criar_reserva(
