@@ -535,4 +535,156 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.criar_reserva(UUID, DATE, INT, TEXT, TEXT, TEXT, UUID) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.criar_reserva(UUID, DATE, INT, TEXT, TEXT, TEXT, UUID) TO authenticated;
 
+-- 20. RPC Atômica: aprovar_jogador com definição obrigatória de classe
+CREATE OR REPLACE FUNCTION public.e_proprietario_ou_admin_do_grupo(p_grupo_id UUID)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RETURN FALSE;
+  END IF;
+  RETURN EXISTS (
+    SELECT 1 FROM public.grupos
+    WHERE id = p_grupo_id AND proprietario_id = auth.uid()
+  ) OR EXISTS (
+    SELECT 1 FROM public.membros_grupo
+    WHERE grupo_id = p_grupo_id 
+      AND usuario_id = auth.uid() 
+      AND papel IN ('proprietario', 'administrador') 
+      AND status = 'ativo'
+  );
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.e_proprietario_ou_admin_do_grupo(UUID) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.e_proprietario_ou_admin_do_grupo(UUID) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.aprovar_jogador(
+  p_membro_id UUID,
+  p_classe TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_caller_id UUID := auth.uid();
+  v_membro RECORD;
+  v_is_authorized BOOLEAN;
+  v_classe_normalizada TEXT;
+  v_classe_display TEXT;
+BEGIN
+  -- 1. Validar autenticação do chamador
+  IF v_caller_id IS NULL THEN
+    RAISE EXCEPTION 'Acesso não autorizado: usuário não autenticado.';
+  END IF;
+
+  -- 2. Localizar o membro pendente
+  SELECT m.*, u.nome AS usuario_nome INTO v_membro
+  FROM public.membros_grupo m
+  JOIN public.usuarios u ON u.id = m.usuario_id
+  WHERE m.id = p_membro_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Membro não encontrado.';
+  END IF;
+
+  -- 3. Validar status PENDENTE
+  IF v_membro.status <> 'pendente' THEN
+    RAISE EXCEPTION 'Este jogador já foi aprovado ou não está com status pendente.';
+  END IF;
+
+  -- 4. Validar se o chamador é PROPRIETARIO ou ADMINISTRADOR do mesmo grupo
+  v_is_authorized := public.e_proprietario_ou_admin_do_grupo(v_membro.grupo_id);
+  IF NOT v_is_authorized THEN
+    RAISE EXCEPTION 'Permissão negada: apenas o proprietário ou administradores deste grupo podem aprovar jogadores.';
+  END IF;
+
+  -- 5. Validar que a classe não é vazia, "Sem Classe" ou inválida
+  IF p_classe IS NULL OR TRIM(p_classe) = '' OR UPPER(TRIM(p_classe)) = 'SEM CLASSE' OR UPPER(TRIM(p_classe)) = 'NULL' THEN
+    RAISE EXCEPTION 'É obrigatório selecionar uma classe válida para aprovar o jogador.';
+  END IF;
+
+  IF UPPER(TRIM(p_classe)) IN ('A', 'CLASSE A', 'CLASSE A (1º)') OR p_classe ILIKE '%A (1º)%' THEN
+    v_classe_normalizada := 'A';
+    v_classe_display := 'Classe A (1º)';
+  ELSIF UPPER(TRIM(p_classe)) IN ('B', 'CLASSE B', 'CLASSE B (2º)') OR p_classe ILIKE '%B (2º)%' THEN
+    v_classe_normalizada := 'B';
+    v_classe_display := 'Classe B (2º)';
+  ELSIF UPPER(TRIM(p_classe)) IN ('C', 'CLASSE C', 'CLASSE C (3º)') OR p_classe ILIKE '%C (3º)%' THEN
+    v_classe_normalizada := 'C';
+    v_classe_display := 'Classe C (3º)';
+  ELSIF UPPER(TRIM(p_classe)) IN ('D', 'CLASSE D', 'CLASSE D (4º)') OR p_classe ILIKE '%D (4º)%' THEN
+    v_classe_normalizada := 'D';
+    v_classe_display := 'Classe D (4º)';
+  ELSIF UPPER(TRIM(p_classe)) IN ('E', 'CLASSE E', 'CLASSE E (5º)') OR p_classe ILIKE '%E (5º)%' THEN
+    v_classe_normalizada := 'E';
+    v_classe_display := 'Classe E (5º)';
+  ELSIF UPPER(TRIM(p_classe)) IN ('F', 'CLASSE F', 'CLASSE F (6º)') OR p_classe ILIKE '%F (6º)%' THEN
+    v_classe_normalizada := 'F';
+    v_classe_display := 'Classe F (6º)';
+  ELSIF UPPER(TRIM(p_classe)) IN ('G', 'CLASSE G', 'CLASSE G (7º)') OR p_classe ILIKE '%G (7º)%' THEN
+    v_classe_normalizada := 'G';
+    v_classe_display := 'Classe G (7º)';
+  ELSIF UPPER(TRIM(p_classe)) IN ('INFANTIL', 'CLASSE INFANTIL') OR p_classe ILIKE '%infantil%' THEN
+    v_classe_normalizada := 'INFANTIL';
+    v_classe_display := 'Classe Infantil';
+  ELSIF UPPER(TRIM(p_classe)) IN ('JUVENIL', 'CLASSE JUVENIL') OR p_classe ILIKE '%juvenil%' THEN
+    v_classe_normalizada := 'JUVENIL';
+    v_classe_display := 'Classe Juvenil';
+  ELSIF UPPER(TRIM(p_classe)) IN ('50+', 'CLASSE 50+', 'CLASSE (50+)') OR p_classe ILIKE '%50+%' THEN
+    v_classe_normalizada := '50+';
+    v_classe_display := 'Classe 50+';
+  ELSE
+    RAISE EXCEPTION 'Classe inválida informada: %', p_classe;
+  END IF;
+
+  -- 6. Atualização atômica de status e classe
+  UPDATE public.membros_grupo
+  SET 
+    status = 'ativo',
+    classe = v_classe_normalizada
+  WHERE id = v_membro.id;
+
+  -- 7. Registro de Notificação para o jogador aprovado
+  INSERT INTO public.notificacoes (
+    grupo_id,
+    usuario_id,
+    titulo,
+    mensagem,
+    tipo,
+    lida,
+    criado_em
+  ) VALUES (
+    v_membro.grupo_id,
+    v_membro.usuario_id,
+    'Solicitação Aprovada',
+    'Sua solicitação de entrada no grupo foi aprovada na ' || v_classe_display || '!',
+    'SOLICITACAO_APROVADA',
+    FALSE,
+    NOW()
+  );
+
+  RETURN jsonb_build_object(
+    'success', TRUE,
+    'membro_id', v_membro.id,
+    'usuario_id', v_membro.usuario_id,
+    'grupo_id', v_membro.grupo_id,
+    'jogador_nome', v_membro.usuario_nome,
+    'status', 'ATIVO',
+    'classe', v_classe_display,
+    'classe_codigo', v_classe_normalizada,
+    'mensagem', v_membro.usuario_nome || ' foi aprovado na ' || v_classe_display || '.'
+  );
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.aprovar_jogador(UUID, TEXT) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.aprovar_jogador(UUID, TEXT) TO authenticated;
+
+
 

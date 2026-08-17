@@ -101,7 +101,21 @@ export interface Reserva {
   jogador_id: string;
   jogador_nome: string;
   jogador_classe?: PlayerClass;
+  status?: 'aguardando' | 'confirmada' | 'cancelada';
   created_at: string;
+
+  // Informações da partida vinculada e participantes
+  partida_id?: string | null;
+  partida?: Partida;
+  jogador_1_id?: string;
+  jogador_2_id?: string;
+  jogador_1_nome?: string;
+  jogador_1_classe?: PlayerClass;
+  jogador_2_nome?: string;
+  jogador_2_classe?: PlayerClass;
+  adversario_id?: string;
+  adversario_nome?: string;
+  adversario_classe?: PlayerClass;
 }
 
 export type NotificacaoType =
@@ -111,18 +125,34 @@ export type NotificacaoType =
   | 'SOLICITACAO_RECUSADA'
   | 'CLASSE_ALTERADA'
   | 'PARTIDA_CRIADA'
+  | 'DESAFIO_RECEBIDO'
+  | 'DESAFIO_ACEITO'
+  | 'DESAFIO_RECUSADO'
   | 'RESULTADO_INFORMADO'
   | 'RESULTADO_CONFIRMADO'
   | 'CORRECAO_SOLICITADA';
 
 export type PartidaStatus =
-  | 'AGUARDANDO_ADV'
+  | 'PENDENTE'
+  | 'ACEITA'
+  | 'RECUSADA'
+  | 'CANCELADA'
+  | 'CONCLUIDA'
+  | 'AGUARDANDO_ACEITE'
   | 'CONFIRMADA'
   | 'REALIZADA'
+  | 'AGUARDANDO_ADV'
   | 'AGUARDANDO_RESULTADO'
   | 'AGUARDANDO_CONFIRMACAO_RESULTADO'
-  | 'FINALIZADA'
-  | 'CANCELADA';
+  | 'FINALIZADA';
+
+export const PARTIDA_STATUS = {
+  PENDENTE: 'PENDENTE' as const,
+  ACEITA: 'ACEITA' as const,
+  RECUSADA: 'RECUSADA' as const,
+  CANCELADA: 'CANCELADA' as const,
+  CONCLUIDA: 'CONCLUIDA' as const,
+} as const;
 
 export interface PartidaSet {
   id?: string;

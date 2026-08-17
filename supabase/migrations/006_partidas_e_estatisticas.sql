@@ -13,8 +13,10 @@ CREATE TABLE IF NOT EXISTS public.partidas (
   jogador_1_id UUID NOT NULL REFERENCES public.usuarios(id) ON DELETE CASCADE,
   jogador_2_id UUID NOT NULL REFERENCES public.usuarios(id) ON DELETE CASCADE,
   status TEXT NOT NULL DEFAULT 'CONFIRMADA' CHECK (status IN (
-    'AGUARDANDO_ADV',
+    'AGUARDANDO_ACEITE',
     'CONFIRMADA',
+    'RECUSADA',
+    'AGUARDANDO_ADV',
     'REALIZADA',
     'AGUARDANDO_RESULTADO',
     'AGUARDANDO_CONFIRMACAO_RESULTADO',
@@ -68,11 +70,15 @@ ALTER TABLE public.partida_sets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.partida_curtidas ENABLE ROW LEVEL SECURITY;
 
 -- 5. POLÍTICAS RLS PARA PARTIDAS
+DROP POLICY IF EXISTS "Jogadores visualizam suas partidas" ON public.partidas;
 DROP POLICY IF EXISTS "Membros do grupo podem ver partidas" ON public.partidas;
-CREATE POLICY "Membros do grupo podem ver partidas"
+CREATE POLICY "Jogadores visualizam suas partidas"
   ON public.partidas FOR SELECT
+  TO authenticated
   USING (
-    EXISTS (
+    auth.uid() = jogador_1_id
+    OR auth.uid() = jogador_2_id
+    OR EXISTS (
       SELECT 1 FROM public.membros_grupo
       WHERE membros_grupo.grupo_id = partidas.grupo_id
         AND membros_grupo.usuario_id = auth.uid()

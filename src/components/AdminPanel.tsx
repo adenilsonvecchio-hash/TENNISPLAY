@@ -25,6 +25,7 @@ import {
   Search,
   Check,
   Tag,
+  AlertCircle,
   X
 } from 'lucide-react';
 
@@ -75,6 +76,27 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ session, onRefreshSessio
   // Owner-only Class Confirmation Modal
   const [classModal, setClassModal] = useState<{ member: MembroGrupo; newClass: PlayerClass } | null>(null);
   const [isSubmittingClass, setIsSubmittingClass] = useState(false);
+
+  // Mandatory Class Approval Modal
+  const [approvalModal, setApprovalModal] = useState<{
+    member: MembroGrupo;
+    selectedClass: PlayerClass | '';
+    errorMessage?: string;
+  } | null>(null);
+  const [isApproving, setIsApproving] = useState(false);
+
+  const APPROVAL_CLASSES: { value: PlayerClass; label: string }[] = [
+    { value: 'Classe A (1º)', label: 'Classe A (1º)' },
+    { value: 'Classe B (2º)', label: 'Classe B (2º)' },
+    { value: 'Classe C (3º)', label: 'Classe C (3º)' },
+    { value: 'Classe D (4º)', label: 'Classe D (4º)' },
+    { value: 'Classe E (5º)', label: 'Classe E (5º)' },
+    { value: 'Classe F (6º)', label: 'Classe F (6º)' },
+    { value: 'Classe G (7º)', label: 'Classe G (7º)' },
+    { value: 'Classe Infantil', label: 'Classe Infantil' },
+    { value: 'Classe Juvenil', label: 'Classe Juvenil' },
+    { value: 'Classe (50+)', label: 'Classe 50+' },
+  ];
 
   useEffect(() => {
     if (activeGroup) {
@@ -167,14 +189,34 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ session, onRefreshSessio
   const occupancyRate = Math.round((todayBookings.length / (totalPossibleSlots || 1)) * 100);
 
   // Actions
-  const handleApproveMember = async (memberId: string, classe: PlayerClass) => {
+  const handleOpenApprovalModal = (member: MembroGrupo) => {
+    setApprovalModal({
+      member,
+      selectedClass: '',
+      errorMessage: undefined,
+    });
+  };
+
+  const handleConfirmApproval = async () => {
+    if (!approvalModal || isApproving || !approvalModal.selectedClass) return;
+    const { member, selectedClass } = approvalModal;
+
+    setIsApproving(true);
+    setApprovalModal((prev) => (prev ? { ...prev, errorMessage: undefined } : null));
+
     try {
-      await DbService.approveMemberWithClass(memberId, classe);
+      const result = await DbService.approveMemberWithClass(member.id, selectedClass);
       await loadAdminData();
       onRefreshSession();
-      toast.success('Jogador aprovado com sucesso!');
+      toast.success(result.message || `${member.usuario?.nome || 'Jogador'} foi aprovado na ${selectedClass}.`);
+      setApprovalModal(null);
     } catch (err: any) {
-      toast.error(err.message || 'Erro ao aprovar jogador.');
+      console.error('[Erro na aprovação do jogador no AdminPanel]:', err);
+      const msg = err.message || 'Erro ao aprovar jogador. Verifique suas permissões.';
+      toast.error(msg);
+      setApprovalModal((prev) => (prev ? { ...prev, errorMessage: msg } : null));
+    } finally {
+      setIsApproving(false);
     }
   };
 
@@ -535,17 +577,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ session, onRefreshSessio
 
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => handleApproveMember(m.id, 'Classe C (3º)')}
-                      className="px-4 py-2 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-[#ccff00] font-extrabold text-xs flex items-center gap-1.5 shadow-sm cursor-pointer"
+                      onClick={() => handleOpenApprovalModal(m)}
+                      className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-sm cursor-pointer active:scale-95 transition-all"
                     >
-                      <Check className="w-4 h-4" />
-                      <span>Aprovar (Classe C - 3º)</span>
-                    </button>
-                    <button
-                      onClick={() => handleApproveMember(m.id, 'Classe A (1º)')}
-                      className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs"
-                    >
-                      Aprovar Classe A (1º)
+                      <UserCheck className="w-4 h-4" />
+                      <span>Aprovar Jogador</span>
                     </button>
                   </div>
                 </div>
@@ -954,6 +990,132 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ session, onRefreshSessio
                   <>
                     <Check className="w-3.5 h-3.5" />
                     <span>Confirmar Alteração</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 10. MANDATORY CLASS PLAYER APPROVAL MODAL */}
+      {approvalModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 max-w-md w-full border border-slate-200 shadow-2xl space-y-5 animate-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-black shadow-xs">
+                  <UserCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-slate-900 text-base">Aprovar jogador</h3>
+                  <p className="text-[11px] text-slate-500 font-medium">Confirmação de entrada no grupo</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => !isApproving && setApprovalModal(null)}
+                disabled={isApproving}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center cursor-pointer transition-colors disabled:opacity-50"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="space-y-4 text-xs">
+              {/* Dynamic message */}
+              <div className="p-3.5 rounded-2xl bg-emerald-50/80 border border-emerald-200 text-emerald-950 font-medium leading-relaxed">
+                Defina a classe de <strong className="font-black text-emerald-900">{approvalModal.member.usuario?.nome || 'este jogador'}</strong> para concluir a aprovação.
+              </div>
+
+              {/* Player Info Card */}
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/80 space-y-2">
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-500 font-bold uppercase text-[10px]">Jogador:</span>
+                  <strong className="text-slate-900 text-xs font-black">{approvalModal.member.usuario?.nome}</strong>
+                </div>
+                {approvalModal.member.usuario?.email && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500 font-bold uppercase text-[10px]">E-mail:</span>
+                    <span className="text-slate-700 text-xs font-medium">{approvalModal.member.usuario.email}</span>
+                  </div>
+                )}
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-500 font-bold uppercase text-[10px]">Status Atual:</span>
+                  <span className="font-extrabold text-amber-700 bg-amber-100/80 px-2.5 py-0.5 rounded-lg border border-amber-300">
+                    PENDENTE
+                  </span>
+                </div>
+              </div>
+
+              {/* Mandatory Class Selector */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-800 flex items-center gap-1">
+                  <span>Classe do jogador</span>
+                  <span className="text-rose-500 font-black">*</span>
+                </label>
+                <select
+                  value={approvalModal.selectedClass}
+                  disabled={isApproving}
+                  onChange={(e) =>
+                    setApprovalModal({
+                      ...approvalModal,
+                      selectedClass: e.target.value as PlayerClass,
+                      errorMessage: undefined,
+                    })
+                  }
+                  className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-xs font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-600 cursor-pointer"
+                >
+                  <option value="" disabled>
+                    Selecione a classe obrigatória...
+                  </option>
+                  {APPROVAL_CLASSES.map((cls) => (
+                    <option key={cls.value} value={cls.value}>
+                      {cls.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-slate-500 font-medium">
+                  A definição de classe é obrigatória para que o jogador possa participar do ranking e desafios.
+                </p>
+              </div>
+
+              {/* Error message if any */}
+              {approvalModal.errorMessage && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                  <span>{approvalModal.errorMessage}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setApprovalModal(null)}
+                disabled={isApproving}
+                className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all cursor-pointer disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmApproval}
+                disabled={!approvalModal.selectedClass || isApproving}
+                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold shadow-md transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed active:scale-95"
+              >
+                {isApproving ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>Aprovando...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Aprovar jogador</span>
                   </>
                 )}
               </button>

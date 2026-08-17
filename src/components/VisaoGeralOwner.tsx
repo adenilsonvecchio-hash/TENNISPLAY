@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { AuthSession, MembroGrupo, Reserva, PlayerClass } from '../types';
+import { AuthSession, MembroGrupo, Reserva, PlayerClass, Partida } from '../types';
 import { DbService } from '../lib/db';
 import { toast, formatClassUpdateToastMessage } from '../lib/toast';
+import { DesafiosRecebidosCard } from './DesafiosRecebidosCard';
 import {
   CalendarDays,
   CalendarCheck,
@@ -50,10 +51,20 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
     currentMember?.classe || 'Sem Classe'
   );
   const [nextUserBooking, setNextUserBooking] = useState<Reserva | null>(null);
+  const [pendingChallenges, setPendingChallenges] = useState<Partida[]>([]);
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const todayStr = new Date().toISOString().split('T')[0];
+
+  useEffect(() => {
+    console.log('[HOME JOGADOR]', {
+      componente: 'VisaoGeralOwner.tsx',
+      userId: user?.id,
+      groupId: activeGroup?.id,
+      role: currentMember?.perfil || session.activeRole
+    });
+  }, [user?.id, activeGroup?.id, currentMember?.perfil, session.activeRole]);
 
   useEffect(() => {
     if (currentMember?.classe) {
@@ -61,37 +72,60 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
     }
   }, [currentMember?.classe]);
 
-  useEffect(() => {
+  const loadData = async () => {
     if (!activeGroup || !user) return;
+    try {
+      const [userBookings, challenges] = await Promise.all([
+        DbService.getUserBookingsAll(user.id, activeGroup.id),
+        DbService.getPendingChallenges(user.id, activeGroup.id)
+      ]);
 
-    let isMounted = true;
-    setLoading(true);
+      const upcoming = userBookings
+        .filter((b) => b.data >= todayStr && (b.status === 'confirmada' || !b.status))
+        .sort(
+          (a, b) =>
+            a.data.localeCompare(b.data) ||
+            a.horario_label.localeCompare(b.horario_label)
+        );
 
-    DbService.getUserBookingsAll(user.id, activeGroup.id)
-      .then((userBookings) => {
-        if (isMounted) {
-          // Filtrar reservas futuras ou de hoje
-          const upcoming = userBookings
-            .filter((b) => b.data >= todayStr)
-            .sort(
-              (a, b) =>
-                a.data.localeCompare(b.data) ||
-                a.horario_label.localeCompare(b.horario_label)
-            );
+      setNextUserBooking(upcoming.length > 0 ? upcoming[0] : null);
+      setPendingChallenges(challenges);
+    } catch (err) {
+      console.error('Erro ao carregar dados da visão geral:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-          setNextUserBooking(upcoming.length > 0 ? upcoming[0] : null);
-          setLoading(false);
-        }
-      })
-      .catch((err) => {
-        console.error('Erro ao carregar reservas do usuário:', err);
-        if (isMounted) setLoading(false);
-      });
-
-    return () => {
-      isMounted = false;
-    };
+  useEffect(() => {
+    loadData();
   }, [activeGroup?.id, user?.id, todayStr]);
+
+  const handleAcceptChallenge = async (matchId: string) => {
+    if (!user) return;
+    try {
+      await DbService.acceptChallenge(matchId, user.id);
+      toast.success('Desafio aceito com sucesso! O jogo está confirmado na sua agenda. 🎾');
+      await loadData();
+      if (onRefreshSession) onRefreshSession();
+    } catch (err: any) {
+      console.error('Erro ao aceitar desafio:', err);
+      toast.error(err.message || 'Erro ao aceitar desafio.');
+    }
+  };
+
+  const handleRejectChallenge = async (matchId: string, motivo?: string) => {
+    if (!user) return;
+    try {
+      await DbService.rejectChallenge(matchId, user.id, motivo);
+      toast.success('Desafio recusado. A quadra e horário foram liberados.');
+      await loadData();
+      if (onRefreshSession) onRefreshSession();
+    } catch (err: any) {
+      console.error('Erro ao recusar desafio:', err);
+      toast.error(err.message || 'Erro ao recusar desafio.');
+    }
+  };
 
   if (!activeGroup || !user) return null;
 
@@ -186,6 +220,19 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
 
         </div>
       </div>
+
+      {/* DESAFIOS RECEBIDOS PENDENTES DE ACEITE */}
+      {pendingChallenges.length > 0 && (
+        <DesafiosRecebidosCard
+          challenges={pendingChallenges}
+          currentUserId={user.id}
+          userId={user.id}
+          groupId={activeGroup.id}
+          onAccept={handleAcceptChallenge}
+          onReject={handleRejectChallenge}
+          onChallengeUpdated={loadData}
+        />
+      )}
 
       {/* 2. AÇÃO PRINCIPAL ÚNICA: BOTÃO AGENDAR HORÁRIO */}
       <div>

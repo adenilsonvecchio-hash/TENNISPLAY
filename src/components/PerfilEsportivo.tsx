@@ -31,6 +31,7 @@ import { InformarResultadoModal } from './InformarResultadoModal';
 import { ConfirmarResultadoModal } from './ConfirmarResultadoModal';
 import { DetalhesPartidaModal } from './DetalhesPartidaModal';
 import { JogarFlowModal } from './JogarFlowModal';
+import { DesafiosRecebidosCard } from './DesafiosRecebidosCard';
 
 interface PerfilEsportivoProps {
   session: AuthSession;
@@ -195,18 +196,49 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
     }
   };
 
+  const handleAcceptChallenge = async (matchId: string) => {
+    if (!user) return;
+    try {
+      await DbService.acceptChallenge(matchId, user.id);
+      toast.success('Desafio aceito! O jogo está confirmado na sua agenda. 🎾');
+      await loadData();
+      onRefreshSession();
+    } catch (err: any) {
+      console.error('Erro ao aceitar desafio:', err);
+      toast.error(err.message || 'Erro ao aceitar desafio.');
+    }
+  };
+
+  const handleRejectChallenge = async (matchId: string, motivo?: string) => {
+    if (!user) return;
+    try {
+      await DbService.rejectChallenge(matchId, user.id, motivo);
+      toast.success('Desafio recusado. A quadra e o horário foram liberados.');
+      await loadData();
+      onRefreshSession();
+    } catch (err: any) {
+      console.error('Erro ao recusar desafio:', err);
+      toast.error(err.message || 'Erro ao recusar desafio.');
+    }
+  };
+
   if (!user || !activeGroup) return null;
+
+  // Desafios pendentes onde o usuário logado é o desafiado (jogador 2)
+  const pendingChallenges = matches.filter(
+    (m) => m.jogador_2_id === user.id && m.status === 'AGUARDANDO_ACEITE'
+  );
 
   // Filtragem de partidas
   const filteredMatches = matches.filter((m) => {
     if (matchSubFilter === 'PROXIMAS') {
-      return ['CONFIRMADA', 'AGUARDANDO_RESULTADO', 'AGUARDANDO_CONFIRMACAO_RESULTADO'].includes(m.status);
+      return ['AGUARDANDO_ACEITE', 'CONFIRMADA', 'AGUARDANDO_RESULTADO', 'AGUARDANDO_CONFIRMACAO_RESULTADO'].includes(m.status);
     }
     if (matchSubFilter === 'FINALIZADAS') {
       return m.status === 'FINALIZADA';
     }
     if (matchSubFilter === 'CANCELADAS') {
-      return m.status === 'CANCELADA';
+      return m.status === 'CANCELADA' || m.status === 'RECUSADA';
     }
     return true;
   });
@@ -440,6 +472,11 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
         >
           <Trophy className="w-3.5 h-3.5" />
           <span>Minhas Partidas ({matches.length})</span>
+          {pendingChallenges.length > 0 && (
+            <span className="px-1.5 py-0.2 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black animate-pulse">
+              {pendingChallenges.length}
+            </span>
+          )}
         </button>
 
         <button
@@ -464,6 +501,16 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
       {activeTab === 'ESTATISTICAS' && stats && (
         <div className="space-y-6 animate-in fade-in">
           
+          {/* DESAFIOS RECEBIDOS PENDENTES DE ACEITE */}
+          {pendingChallenges.length > 0 && (
+            <DesafiosRecebidosCard
+              challenges={pendingChallenges}
+              currentUserId={user.id}
+              onAccept={handleAcceptChallenge}
+              onReject={handleRejectChallenge}
+            />
+          )}
+
           {/* CARDS DE PERFORMANCE TÉCNICA */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             
@@ -652,6 +699,16 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
       {activeTab === 'PARTIDAS' && (
         <div className="space-y-4 animate-in fade-in">
           
+          {/* DESAFIOS RECEBIDOS PENDENTES DE ACEITE */}
+          {pendingChallenges.length > 0 && (
+            <DesafiosRecebidosCard
+              challenges={pendingChallenges}
+              currentUserId={user.id}
+              onAccept={handleAcceptChallenge}
+              onReject={handleRejectChallenge}
+            />
+          )}
+
           {/* SUB-FILTROS */}
           <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
             {(['TODAS', 'PROXIMAS', 'FINALIZADAS', 'CANCELADAS'] as const).map((filter) => (
@@ -680,7 +737,7 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
               <button
                 type="button"
                 onClick={() => setShowJogarModal(true)}
-                className="px-4 py-2 rounded-xl bg-[#0F172A] text-[#ccff00] text-xs font-black"
+                className="px-4 py-2 rounded-xl bg-[#0F172A] text-[#ccff00] text-xs font-black cursor-pointer"
               >
                 Marcar um Jogo Agora
               </button>
@@ -695,14 +752,19 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
 
                 const isWinner = m.vencedor_id === user.id;
                 const isFinished = m.status === 'FINALIZADA';
+                const isAguardandoAceite = m.status === 'AGUARDANDO_ACEITE';
+                const isRecusada = m.status === 'RECUSADA';
 
                 const canReport = ['CONFIRMADA', 'AGUARDANDO_RESULTADO', 'REALIZADA'].includes(m.status);
                 const canConfirm = m.status === 'AGUARDANDO_CONFIRMACAO_RESULTADO' && m.resultado_informado_por !== user.id;
+                const isChallengeForMe = isAguardandoAceite && !isJ1;
 
                 return (
                   <div
                     key={m.id}
-                    className="bg-white rounded-3xl p-4 sm:p-5 border border-slate-200 shadow-2xs hover:shadow-md transition-all flex flex-col justify-between space-y-3"
+                    className={`bg-white rounded-3xl p-4 sm:p-5 border shadow-2xs hover:shadow-md transition-all flex flex-col justify-between space-y-3 ${
+                      isChallengeForMe ? 'border-amber-300 bg-amber-50/20' : 'border-slate-200'
+                    }`}
                   >
                     <div>
                       {/* HEADER DA PARTIDA */}
@@ -719,9 +781,23 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
                           }`}>
                             {isWinner ? 'Vitória' : 'Derrota'}
                           </span>
+                        ) : isAguardandoAceite ? (
+                          isJ1 ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-200">
+                              Aguardando Aceite
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-400 text-slate-950 animate-pulse">
+                              Desafio Recebido
+                            </span>
+                          )
+                        ) : isRecusada ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-100 text-rose-900">
+                            Desafio Recusado
+                          </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-100 text-blue-900">
-                            {m.status === 'AGUARDANDO_CONFIRMACAO_RESULTADO' ? 'Aguardando Confirmação' : 'Confirmada'}
+                            {m.status === 'AGUARDANDO_CONFIRMACAO_RESULTADO' ? 'Aguardando Confirmação' : m.status === 'CANCELADA' ? 'Cancelada' : 'Confirmada'}
                           </span>
                         )}
                       </div>
@@ -757,33 +833,55 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
 
                     {/* BOTÕES DE AÇÃO */}
                     <div className="flex items-center gap-2 pt-1">
-                      {canConfirm && (
-                        <button
-                          type="button"
-                          onClick={() => setSelectedMatchForConfirm(m)}
-                          className="flex-1 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-black transition-colors"
-                        >
-                          Conferir Placar
-                        </button>
-                      )}
+                      {isChallengeForMe ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handleAcceptChallenge(m.id)}
+                            className="flex-1 py-2 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-[#ccff00] text-xs font-black transition-colors flex items-center justify-center gap-1 cursor-pointer"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5 text-[#ccff00]" />
+                            <span>Aceitar</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleRejectChallenge(m.id)}
+                            className="py-2 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold transition-colors cursor-pointer"
+                          >
+                            Recusar
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          {canConfirm && (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedMatchForConfirm(m)}
+                              className="flex-1 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-black transition-colors cursor-pointer"
+                            >
+                              Conferir Placar
+                            </button>
+                          )}
 
-                      {canReport && (
-                        <button
-                          type="button"
-                          onClick={() => setSelectedMatchForScore(m)}
-                          className="flex-1 py-2 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-[#ccff00] text-xs font-black transition-colors"
-                        >
-                          Informar Resultado
-                        </button>
-                      )}
+                          {canReport && (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedMatchForScore(m)}
+                              className="flex-1 py-2 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-[#ccff00] text-xs font-black transition-colors cursor-pointer"
+                            >
+                              Informar Resultado
+                            </button>
+                          )}
 
-                      <button
-                        type="button"
-                        onClick={() => setSelectedMatchForDetails(m)}
-                        className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-black transition-colors"
-                      >
-                        Ver Detalhes
-                      </button>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedMatchForDetails(m)}
+                            className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-black transition-colors cursor-pointer"
+                          >
+                            Ver Detalhes
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 );

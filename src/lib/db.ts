@@ -256,6 +256,33 @@ async function completePendingOnboarding(user: any): Promise<void> {
   }
 }
 
+async function loadGroupClasses(groupId: string, userIds: string[]): Promise<Map<string, PlayerClass>> {
+  const map = new Map<string, PlayerClass>();
+  if (!groupId || !userIds || userIds.length === 0) return map;
+
+  const cleanIds = Array.from(new Set(userIds.filter(Boolean)));
+  if (cleanIds.length === 0) return map;
+
+  try {
+    const db = requireDb();
+    const { data, error } = await db
+      .from('membros_grupo')
+      .select('usuario_id, classe')
+      .eq('grupo_id', groupId)
+      .in('usuario_id', cleanIds);
+
+    if (!error && data) {
+      data.forEach((row: any) => {
+        map.set(row.usuario_id, classFromDb(row.classe));
+      });
+    }
+  } catch (err) {
+    console.warn('[loadGroupClasses] Erro ao carregar classes:', err);
+  }
+
+  return map;
+}
+
 async function mapReservation(row: any): Promise<Reserva> {
   const start = row.horario?.hora_inicio ? timeText(row.horario.hora_inicio) : '';
   const end = row.horario?.hora_fim ? timeText(row.horario.hora_fim) : '';
@@ -270,11 +297,12 @@ async function mapReservation(row: any): Promise<Reserva> {
     jogador_id: row.criador_id,
     jogador_nome: row.criador?.nome || '',
     jogador_classe: classFromDb(row.criador_classe),
+    status: row.status || 'confirmada',
     created_at: row.criado_em
   };
 }
 
-async function mapMatch(row: any, currentUserId?: string): Promise<Partida> {
+async function mapMatch(row: any, currentUserId?: string, externalClassMap?: Map<string, PlayerClass>): Promise<Partida> {
   const sets: PartidaSet[] = (row.partida_sets || row.sets || []).map((s: any) => ({
     id: s.id,
     partida_id: s.partida_id,
@@ -293,12 +321,17 @@ async function mapMatch(row: any, currentUserId?: string): Promise<Partida> {
     parsedReserva = await mapReservation(row.reserva);
   }
 
+  const j1Id = row.jogador_1_id;
+  const j2Id = row.jogador_2_id;
+  const j1Class = externalClassMap?.get(j1Id) || (row.jogador_1_membro?.classe ? classFromDb(row.jogador_1_membro.classe) : undefined);
+  const j2Class = externalClassMap?.get(j2Id) || (row.jogador_2_membro?.classe ? classFromDb(row.jogador_2_membro.classe) : undefined);
+
   return {
     id: row.id,
     grupo_id: row.grupo_id,
     reserva_id: row.reserva_id,
-    jogador_1_id: row.jogador_1_id,
-    jogador_2_id: row.jogador_2_id,
+    jogador_1_id: j1Id,
+    jogador_2_id: j2Id,
     status: (row.status || 'CONFIRMADA') as PartidaStatus,
     resultado_informado_por: row.resultado_informado_por,
     vencedor_id: row.vencedor_id,
@@ -309,14 +342,161 @@ async function mapMatch(row: any, currentUserId?: string): Promise<Partida> {
     finalizado_em: row.finalizado_em,
     jogador_1: row.jogador_1 ? mapUser(row.jogador_1) : undefined,
     jogador_2: row.jogador_2 ? mapUser(row.jogador_2) : undefined,
-    jogador_1_classe: row.jogador_1_membro?.classe ? classFromDb(row.jogador_1_membro.classe) : undefined,
-    jogador_2_classe: row.jogador_2_membro?.classe ? classFromDb(row.jogador_2_membro.classe) : undefined,
+    jogador_1_classe: j1Class,
+    jogador_2_classe: j2Class,
     vencedor: row.vencedor ? mapUser(row.vencedor) : undefined,
     reserva: parsedReserva,
     sets,
     curtidas_count: curtidasCount,
     usuario_curtiu: usuarioCurtiu
   };
+}
+
+async function enrichReservationsWithMatches(
+  reservas: any[],
+  currentUserId?: string,
+  groupId?: string
+): Promise<Reserva[]> {
+  if (!reservas || reservas.length === 0) return [];
+  const db = requireDb();
+
+  const reservaIds = reservas.map((r) => r.id).filter(Boolean);
+  const matchesByReservaId = new Map<string, any>();
+  const userIdsSet = new Set<string>();
+
+  reservas.forEach((r) => {
+    if (r.criador_id) userIdsSet.add(r.criador_id);
+  });
+
+  if (reservaIds.length > 0) {
+    try {
+      const { data: matches, error } = await db
+        .from('partidas')
+        .select(`
+          *,
+          jogador_1:usuarios!partidas_jogador_1_id_fkey(id, nome, email, whatsapp, avatar_url, criado_em),
+          jogador_2:usuarios!partidas_jogador_2_id_fkey(id, nome, email, whatsapp, avatar_url, criado_em),
+          vencedor:usuarios!partidas_vencedor_id_fkey(id, nome),
+          partida_sets(*)
+        `)
+        .in('reserva_id', reservaIds)
+        .neq('status', 'CANCELADA');
+
+      if (!error && matches) {
+        matches.forEach((m: any) => {
+          matchesByReservaId.set(m.reserva_id, m);
+          if (m.jogador_1_id) userIdsSet.add(m.jogador_1_id);
+          if (m.jogador_2_id) userIdsSet.add(m.jogador_2_id);
+        });
+      }
+    } catch (mErr) {
+      console.warn('[enrichReservationsWithMatches] Erro ao buscar partidas associadas:', mErr);
+    }
+  }
+
+  // Buscar classes dos membros no grupo especificado
+  const effectiveGroupId = groupId || reservas[0]?.grupo_id;
+  const classMap = effectiveGroupId
+    ? await loadGroupClasses(effectiveGroupId, Array.from(userIdsSet))
+    : new Map<string, PlayerClass>();
+
+  return Promise.all(
+    reservas.map(async (row) => {
+      const baseReserva = await mapReservation(row);
+      const matchRow = matchesByReservaId.get(row.id);
+
+      if (matchRow) {
+        const j1Id = matchRow.jogador_1_id;
+        const j2Id = matchRow.jogador_2_id;
+        const j1Name = matchRow.jogador_1?.nome || 'Jogador 1';
+        const j2Name = matchRow.jogador_2?.nome || 'Jogador 2';
+        const j1Class = classMap.get(j1Id) || classFromDb(matchRow.jogador_1_membro?.classe);
+        const j2Class = classMap.get(j2Id) || classFromDb(matchRow.jogador_2_membro?.classe);
+
+        const matchObj: Partida = {
+          id: matchRow.id,
+          grupo_id: matchRow.grupo_id,
+          reserva_id: matchRow.reserva_id,
+          jogador_1_id: j1Id,
+          jogador_2_id: j2Id,
+          status: (matchRow.status || 'CONFIRMADA') as PartidaStatus,
+          resultado_informado_por: matchRow.resultado_informado_por,
+          vencedor_id: matchRow.vencedor_id,
+          foto_path: matchRow.foto_path,
+          foto_url: matchRow.foto_url,
+          detalhes_placar: matchRow.detalhes_placar,
+          criado_em: matchRow.criado_em,
+          finalizado_em: matchRow.finalizado_em,
+          jogador_1: matchRow.jogador_1 ? mapUser(matchRow.jogador_1) : undefined,
+          jogador_2: matchRow.jogador_2 ? mapUser(matchRow.jogador_2) : undefined,
+          jogador_1_classe: j1Class,
+          jogador_2_classe: j2Class,
+          vencedor: matchRow.vencedor ? mapUser(matchRow.vencedor) : undefined,
+          reserva: baseReserva,
+          sets: (matchRow.partida_sets || []).map((s: any) => ({
+            id: s.id,
+            partida_id: s.partida_id,
+            numero_set: s.numero_set,
+            jogador_1_games: Number(s.jogador_1_games || 0),
+            jogador_2_games: Number(s.jogador_2_games || 0),
+            created_at: s.created_at || s.criado_em
+          })).sort((a: PartidaSet, b: PartidaSet) => a.numero_set - b.numero_set)
+        };
+
+        // Identificação do adversário comparando com o usuário autenticado
+        let advId: string | undefined = undefined;
+        let advNome: string | undefined = undefined;
+        let advClasse: PlayerClass | undefined = undefined;
+
+        if (currentUserId) {
+          if (j1Id === currentUserId) {
+            advId = j2Id;
+            advNome = j2Name;
+            advClasse = j2Class;
+          } else if (j2Id === currentUserId) {
+            advId = j1Id;
+            advNome = j1Name;
+            advClasse = j1Class;
+          }
+        }
+
+        // Se não identificado por currentUserId mas o criador for conhecido
+        if (!advNome && baseReserva.jogador_id) {
+          if (baseReserva.jogador_id === j1Id) {
+            advId = j2Id;
+            advNome = j2Name;
+            advClasse = j2Class;
+          } else if (baseReserva.jogador_id === j2Id) {
+            advId = j1Id;
+            advNome = j1Name;
+            advClasse = j1Class;
+          }
+        }
+
+        return {
+          ...baseReserva,
+          partida_id: matchRow.id,
+          partida: matchObj,
+          jogador_1_id: j1Id,
+          jogador_1_nome: j1Name,
+          jogador_1_classe: j1Class,
+          jogador_2_id: j2Id,
+          jogador_2_nome: j2Name,
+          jogador_2_classe: j2Class,
+          adversario_id: advId,
+          adversario_nome: advNome,
+          adversario_classe: advClasse,
+          jogador_classe: classMap.get(baseReserva.jogador_id) || baseReserva.jogador_classe
+        };
+      }
+
+      // Se não há partida vinculada
+      return {
+        ...baseReserva,
+        jogador_classe: classMap.get(baseReserva.jogador_id) || baseReserva.jogador_classe
+      };
+    })
+  );
 }
 
 export const DbService = {
@@ -516,13 +696,51 @@ export const DbService = {
   },
 
 
-  async approveMemberWithClass(memberId: string, value: PlayerClass): Promise<MembroGrupo[]> {
+  async approveMemberWithClass(memberId: string, value: PlayerClass): Promise<{ members: MembroGrupo[]; message: string; approvedClass: PlayerClass }> {
     const db = requireDb();
-    const { data: current, error: findError } = await db.from('membros_grupo').select('grupo_id').eq('id', memberId).single();
-    if (findError) fail('Membro não encontrado', findError);
-    const { error } = await db.from('membros_grupo').update({ status: 'ativo', classe: classToDb(value) }).eq('id', memberId);
-    if (error) fail('Erro ao aprovar jogador', error);
-    return this.getGroupMembers(current.grupo_id);
+    
+    // Validar se classe informada não é vazia ou Sem Classe
+    if (!value || value === 'Sem Classe') {
+      fail('É obrigatório selecionar uma classe válida para aprovar o jogador.');
+    }
+
+    const { data: current, error: findError } = await db
+      .from('membros_grupo')
+      .select('grupo_id, usuario:usuarios(nome)')
+      .eq('id', memberId)
+      .single();
+
+    if (findError || !current) fail('Membro não encontrado', findError);
+
+    // Tentar executar via RPC segura public.aprovar_jogador
+    const { data: rpcRes, error: rpcErr } = await db.rpc('aprovar_jogador', {
+      p_membro_id: memberId,
+      p_classe: value
+    });
+
+    if (rpcErr) {
+      console.warn('[RPC aprovar_jogador fallback triggered]:', rpcErr.message);
+      // Fallback seguro caso a instância ainda não tenha compilado a migração
+      const dbClass = classToDb(value);
+      if (!dbClass) fail('Classe selecionada inválida');
+
+      const { error: updateErr } = await db
+        .from('membros_grupo')
+        .update({ status: 'ativo', classe: dbClass })
+        .eq('id', memberId);
+
+      if (updateErr) fail(updateErr.message || 'Erro ao aprovar jogador', updateErr);
+    }
+
+    const updatedMembers = await this.getGroupMembers(current.grupo_id);
+    const jogadorNome = (current.usuario as any)?.nome || 'Jogador';
+    const message = rpcRes?.mensagem || `${jogadorNome} foi aprovado na ${value}.`;
+
+    return {
+      members: updatedMembers,
+      message,
+      approvedClass: value
+    };
   },
 
   async cancelMembershipRequest(memberId: string, userId: string): Promise<AuthSession> {
@@ -718,10 +936,10 @@ export const DbService = {
     return this.getGroupCourtConfig(groupId, date).then((config) => ({ ...config, prazo_cancelamento_horas: deadline }));
   },
 
-  async getBookingsForDate(groupId: string, date: string): Promise<Reserva[]> {
+  async getBookingsForDate(groupId: string, date: string, currentUserId?: string): Promise<Reserva[]> {
     const { data, error } = await requireDb()
       .from('reservas')
-      .select('*, quadra:quadras(id, numero, nome), horario:horarios(id, hora_inicio, hora_fim), criador:usuarios!reservas_criador_id_fkey(id, nome), adversario:usuarios!reservas_adversario_id_fkey(id, nome)')
+      .select('*, quadra:quadras(id, numero, nome), horario:horarios(id, hora_inicio, hora_fim), criador:usuarios!reservas_criador_id_fkey(id, nome)')
       .eq('grupo_id', groupId)
       .eq('data', date)
       .in('status', ['aguardando', 'confirmada']);
@@ -729,7 +947,7 @@ export const DbService = {
       console.error('Erro ao sincronizar reservas:', error);
       fail('Erro ao sincronizar reservas', error);
     }
-    return Promise.all((data || []).map(mapReservation));
+    return enrichReservationsWithMatches(data || [], currentUserId, groupId);
   },
 
   async createBooking(input: {
@@ -1046,7 +1264,7 @@ export const DbService = {
     const { data, error: reservaError } = await db
       .from('reservas')
       .insert(payload)
-      .select('*, quadra:quadras(id, numero, nome), horario:horarios(id, hora_inicio, hora_fim), criador:usuarios!reservas_criador_id_fkey(id, nome), adversario:usuarios!reservas_adversario_id_fkey(id, nome)')
+      .select('*, quadra:quadras(id, numero, nome), horario:horarios(id, hora_inicio, hora_fim), criador:usuarios!reservas_criador_id_fkey(id, nome)')
       .single();
 
     if (reservaError || !data) {
@@ -1082,14 +1300,15 @@ export const DbService = {
     return mapReservation(data);
   },
 
-  async cancelBooking(id: string, userId: string, role: PerfilRole): Promise<void> {
+  async cancelBooking(id: string, userId: string, role: PerfilRole, isOpponentRejection: boolean = false): Promise<void> {
     const db = requireDb();
 
     // 1. Log temporário de diagnóstico
     console.log('CANCELAMENTO DEBUG', {
       id,
       userId,
-      role
+      role,
+      isOpponentRejection
     });
 
     // 2. Tentar via RPC public.cancelar_reserva se disponível no Supabase
@@ -1172,7 +1391,7 @@ export const DbService = {
     const isCreator = bookingBefore.criador_id === userId;
     const isAdmin = ['PROPRIETARIO', 'ADMINISTRADOR'].includes(role);
 
-    if (!isCreator && !isAdmin) {
+    if (!isCreator && !isAdmin && !isOpponentRejection) {
       throw new Error('Você não tem permissão para cancelar esta reserva.');
     }
 
@@ -1248,23 +1467,48 @@ export const DbService = {
   },
 
   async getUserBookingsAll(userId: string, groupId?: string): Promise<Reserva[]> {
-    let query = requireDb().from('reservas').select('*, quadra:quadras(numero), horario:horarios(hora_inicio,hora_fim), criador:usuarios!reservas_criador_id_fkey(id, nome), adversario:usuarios!reservas_adversario_id_fkey(id, nome)').eq('criador_id', userId).order('data', { ascending: false });
+    const db = requireDb();
+    let query = db
+      .from('reservas')
+      .select('*, quadra:quadras(id, numero, nome), horario:horarios(id, hora_inicio, hora_fim), criador:usuarios!reservas_criador_id_fkey(id, nome)')
+      .order('data', { ascending: false });
+
     if (groupId) query = query.eq('grupo_id', groupId);
+
+    // Buscar partidas onde o usuário é jogador_2 para também incluir no histórico
+    const { data: userMatches } = await db
+      .from('partidas')
+      .select('reserva_id')
+      .eq('jogador_2_id', userId)
+      .not('reserva_id', 'is', null);
+
+    const matchReservaIds = (userMatches || []).map((m: any) => m.reserva_id).filter(Boolean);
+
+    if (matchReservaIds.length > 0) {
+      query = query.or(`criador_id.eq.${userId},id.in.(${matchReservaIds.join(',')})`);
+    } else {
+      query = query.eq('criador_id', userId);
+    }
+
     const { data, error } = await query;
     if (error) {
       console.error('Erro ao carregar histórico:', error);
       fail('Erro ao carregar histórico', error);
     }
-    return Promise.all((data || []).map(mapReservation));
+    return enrichReservationsWithMatches(data || [], userId, groupId);
   },
 
-  async getAllGroupBookings(groupId: string): Promise<Reserva[]> {
-    const { data, error } = await requireDb().from('reservas').select('*, quadra:quadras(numero), horario:horarios(hora_inicio,hora_fim), criador:usuarios!reservas_criador_id_fkey(id, nome), adversario:usuarios!reservas_adversario_id_fkey(id, nome)').eq('grupo_id', groupId).order('data', { ascending: false });
+  async getAllGroupBookings(groupId: string, currentUserId?: string): Promise<Reserva[]> {
+    const { data, error } = await requireDb()
+      .from('reservas')
+      .select('*, quadra:quadras(id, numero, nome), horario:horarios(id, hora_inicio, hora_fim), criador:usuarios!reservas_criador_id_fkey(id, nome)')
+      .eq('grupo_id', groupId)
+      .order('data', { ascending: false });
     if (error) {
       console.error('Erro ao carregar reservas:', error);
       fail('Erro ao carregar reservas', error);
     }
-    return Promise.all((data || []).map(mapReservation));
+    return enrichReservationsWithMatches(data || [], currentUserId, groupId);
   },
 
   async logout(): Promise<void> {
@@ -1285,47 +1529,92 @@ export const DbService = {
     status?: PartidaStatus;
   }): Promise<Partida> {
     const db = requireDb();
-    const status = input.status || 'CONFIRMADA';
+    const primaryStatus = input.status || 'PENDENTE';
 
-    const { data, error } = await db
+    console.log('[DEBUG createMatch] Input:', {
+      grupo_id: input.grupoId,
+      reserva_id: input.reservaId,
+      jogador_1_id: input.jogador1Id,
+      jogador_2_id: input.jogador2Id,
+      status: primaryStatus
+    });
+
+    let insertResult = await db
       .from('partidas')
       .insert({
         grupo_id: input.grupoId,
         reserva_id: input.reservaId || null,
         jogador_1_id: input.jogador1Id,
         jogador_2_id: input.jogador2Id,
-        status: status
+        status: primaryStatus
       })
       .select(`
         *,
         jogador_1:usuarios!partidas_jogador_1_id_fkey(*),
         jogador_2:usuarios!partidas_jogador_2_id_fkey(*),
-        reserva:reservas(*, quadra:quadras(*), horario:horarios(*), criador:usuarios!reservas_criador_id_fkey(*), adversario:usuarios!reservas_adversario_id_fkey(*)),
+        reserva:reservas(*, quadra:quadras(*), horario:horarios(*), criador:usuarios!reservas_criador_id_fkey(*)),
         partida_sets(*)
       `)
       .single();
 
-    if (error) {
-      console.error('[Supabase Create Match Error]:', error);
-      fail('Erro ao criar partida', error);
+    // Fallback inteligente para compatibilidade com constraints legadas
+    if (insertResult.error && (insertResult.error.message?.includes('partidas_status_check') || insertResult.error.code === '23514')) {
+      console.warn('[createMatch] Tentando fallback para status legado AGUARDANDO_ACEITE devido a constraint:', insertResult.error);
+      const fallbackStatus = primaryStatus === 'PENDENTE' ? 'AGUARDANDO_ACEITE' : 'PENDENTE';
+      insertResult = await db
+        .from('partidas')
+        .insert({
+          grupo_id: input.grupoId,
+          reserva_id: input.reservaId || null,
+          jogador_1_id: input.jogador1Id,
+          jogador_2_id: input.jogador2Id,
+          status: fallbackStatus
+        })
+        .select(`
+          *,
+          jogador_1:usuarios!partidas_jogador_1_id_fkey(*),
+          jogador_2:usuarios!partidas_jogador_2_id_fkey(*),
+          reserva:reservas(*, quadra:quadras(*), horario:horarios(*), criador:usuarios!reservas_criador_id_fkey(*)),
+          partida_sets(*)
+        `)
+        .single();
     }
+
+    if (insertResult.error) {
+      console.error('[Supabase Create Match Error]:', insertResult.error);
+      throw new Error('Não foi possível enviar o desafio. Tente novamente.');
+    }
+
+    const data = insertResult.data;
+    console.log('[DEBUG createMatch] Partida criada com sucesso:', data);
 
     // Criar notificação para o adversário convidado
     try {
       const { data: creatorUser } = await db.from('usuarios').select('nome').eq('id', input.jogador1Id).single();
       const creatorName = creatorUser?.nome || 'Um jogador';
-      await this.createNotification(
-        input.grupoId,
-        input.jogador2Id,
-        'Novo Jogo Marcado! 🎾',
-        `${creatorName} marcou uma partida com você. Confira na sua agenda.`,
-        'PARTIDA_CRIADA'
-      );
+      if (primaryStatus === 'PENDENTE' || primaryStatus === 'AGUARDANDO_ACEITE') {
+        await this.createNotification(
+          input.grupoId,
+          input.jogador2Id,
+          'Você foi desafiado! 🎾',
+          `${creatorName} desafiou você para uma partida. Aceite ou recuse o desafio.`,
+          'DESAFIO_RECEBIDO'
+        );
+      } else {
+        await this.createNotification(
+          input.grupoId,
+          input.jogador2Id,
+          'Novo Jogo Marcado! 🎾',
+          `${creatorName} marcou uma partida com você. Confira na sua agenda.`,
+          'PARTIDA_CRIADA'
+        );
+      }
     } catch (notifErr) {
       console.warn('Erro ao disparar notificação de partida:', notifErr);
     }
 
-    return mapMatch(data, input.jogador1Id);
+    const classMap = await loadGroupClasses(input.grupoId, [input.jogador1Id, input.jogador2Id]);
+    return mapMatch(data, input.jogador1Id, classMap);
   },
 
   async getMatchesForGroup(groupId: string, currentUserId?: string): Promise<Partida[]> {
@@ -1337,7 +1626,7 @@ export const DbService = {
         jogador_1:usuarios!partidas_jogador_1_id_fkey(*),
         jogador_2:usuarios!partidas_jogador_2_id_fkey(*),
         vencedor:usuarios!partidas_vencedor_id_fkey(*),
-        reserva:reservas(*, quadra:quadras(*), horario:horarios(*), criador:usuarios!reservas_criador_id_fkey(*), adversario:usuarios!reservas_adversario_id_fkey(*)),
+        reserva:reservas(*, quadra:quadras(*), horario:horarios(*), criador:usuarios!reservas_criador_id_fkey(*)),
         partida_sets(*),
         partida_curtidas(id, usuario_id)
       `)
@@ -1349,7 +1638,14 @@ export const DbService = {
       fail('Erro ao carregar partidas do grupo', error);
     }
 
-    return Promise.all((data || []).map((row) => mapMatch(row, currentUserId)));
+    const userIds: string[] = [];
+    (data || []).forEach((row: any) => {
+      if (row.jogador_1_id) userIds.push(row.jogador_1_id);
+      if (row.jogador_2_id) userIds.push(row.jogador_2_id);
+    });
+    const classMap = await loadGroupClasses(groupId, userIds);
+
+    return Promise.all((data || []).map((row) => mapMatch(row, currentUserId, classMap)));
   },
 
   async getMatchesForUser(userId: string, groupId?: string): Promise<Partida[]> {
@@ -1361,7 +1657,7 @@ export const DbService = {
         jogador_1:usuarios!partidas_jogador_1_id_fkey(*),
         jogador_2:usuarios!partidas_jogador_2_id_fkey(*),
         vencedor:usuarios!partidas_vencedor_id_fkey(*),
-        reserva:reservas(*, quadra:quadras(*), horario:horarios(*), criador:usuarios!reservas_criador_id_fkey(*), adversario:usuarios!reservas_adversario_id_fkey(*)),
+        reserva:reservas(*, quadra:quadras(*), horario:horarios(*), criador:usuarios!reservas_criador_id_fkey(*)),
         partida_sets(*),
         partida_curtidas(id, usuario_id)
       `)
@@ -1378,7 +1674,15 @@ export const DbService = {
       fail('Erro ao carregar partidas do usuário', error);
     }
 
-    return Promise.all((data || []).map((row) => mapMatch(row, userId)));
+    const userIds: string[] = [];
+    const effectiveGroupId = groupId || (data && data[0]?.grupo_id);
+    (data || []).forEach((row: any) => {
+      if (row.jogador_1_id) userIds.push(row.jogador_1_id);
+      if (row.jogador_2_id) userIds.push(row.jogador_2_id);
+    });
+    const classMap = effectiveGroupId ? await loadGroupClasses(effectiveGroupId, userIds) : new Map<string, PlayerClass>();
+
+    return Promise.all((data || []).map((row) => mapMatch(row, userId, classMap)));
   },
 
   async getMatchById(matchId: string, currentUserId?: string): Promise<Partida | null> {
@@ -1390,7 +1694,7 @@ export const DbService = {
         jogador_1:usuarios!partidas_jogador_1_id_fkey(*),
         jogador_2:usuarios!partidas_jogador_2_id_fkey(*),
         vencedor:usuarios!partidas_vencedor_id_fkey(*),
-        reserva:reservas(*, quadra:quadras(*), horario:horarios(*), criador:usuarios!reservas_criador_id_fkey(*), adversario:usuarios!reservas_adversario_id_fkey(*)),
+        reserva:reservas(*, quadra:quadras(*), horario:horarios(*), criador:usuarios!reservas_criador_id_fkey(*)),
         partida_sets(*),
         partida_curtidas(id, usuario_id)
       `)
@@ -1403,7 +1707,8 @@ export const DbService = {
     }
 
     if (!data) return null;
-    return mapMatch(data, currentUserId);
+    const classMap = await loadGroupClasses(data.grupo_id, [data.jogador_1_id, data.jogador_2_id]);
+    return mapMatch(data, currentUserId, classMap);
   },
 
   async submitMatchScore(input: {
@@ -1623,6 +1928,222 @@ export const DbService = {
       } catch (err) {
         console.warn('Reserva já cancelada ou não foi possível cancelar em cascata:', err);
       }
+    }
+  },
+
+  async getPendingChallenges(userId: string, groupId?: string): Promise<Partida[]> {
+    const db = requireDb();
+
+    console.log('[DEBUG getPendingChallenges] Usuário autenticado:', userId);
+    console.log('[DEBUG getPendingChallenges] Grupo atual:', groupId);
+
+    let query = db
+      .from('partidas')
+      .select(`
+        *,
+        jogador_1:usuarios!partidas_jogador_1_id_fkey(
+          id,
+          nome,
+          email,
+          whatsapp,
+          avatar_url,
+          criado_em
+        ),
+        jogador_2:usuarios!partidas_jogador_2_id_fkey(
+          id,
+          nome,
+          email,
+          whatsapp,
+          avatar_url,
+          criado_em
+        ),
+        reserva:reservas(
+          *,
+          quadra:quadras(id, numero, nome),
+          horario:horarios(id, hora_inicio, hora_fim)
+        ),
+        partida_sets(*)
+      `)
+      .eq('jogador_2_id', userId)
+      .in('status', ['PENDENTE', 'AGUARDANDO_ACEITE'])
+      .order('criado_em', { ascending: false });
+
+    if (groupId) {
+      query = query.eq('grupo_id', groupId);
+    }
+
+    const { data, error } = await query;
+
+    console.log('[DEBUG getPendingChallenges] Desafios recebidos:', data);
+    if (error) {
+      console.error('[DEBUG getPendingChallenges] Erro ao buscar desafios:', error);
+      return [];
+    }
+
+    const userIds: string[] = [];
+    const effectiveGroupId = groupId || (data && data[0]?.grupo_id);
+    (data || []).forEach((row: any) => {
+      if (row.jogador_1_id) userIds.push(row.jogador_1_id);
+      if (row.jogador_2_id) userIds.push(row.jogador_2_id);
+    });
+    const classMap = effectiveGroupId ? await loadGroupClasses(effectiveGroupId, userIds) : new Map<string, PlayerClass>();
+
+    return Promise.all((data || []).map((row) => mapMatch(row, userId, classMap)));
+  },
+
+  async acceptChallenge(matchId: string, userId: string): Promise<void> {
+    const db = requireDb();
+    const { data: match, error: fetchErr } = await db
+      .from('partidas')
+      .select(`
+        *,
+        jogador_1:usuarios!partidas_jogador_1_id_fkey(*),
+        jogador_2:usuarios!partidas_jogador_2_id_fkey(*),
+        reserva:reservas(*, quadra:quadras(*), horario:horarios(*))
+      `)
+      .eq('id', matchId)
+      .single();
+
+    if (fetchErr || !match) {
+      fail('Partida não encontrada para aceite', fetchErr);
+    }
+
+    if (match.jogador_2_id !== userId) {
+      throw new Error('Apenas o jogador desafiado pode aceitar este desafio.');
+    }
+
+    if (!['PENDENTE', 'AGUARDANDO_ACEITE'].includes(match.status)) {
+      throw new Error('Este desafio já foi respondido ou não está mais pendente.');
+    }
+
+    let { error: updateErr } = await db
+      .from('partidas')
+      .update({
+        status: 'ACEITA'
+      })
+      .eq('id', matchId);
+
+    // Fallback para status legado CONFIRMADA caso a constraint antiga ainda esteja ativa
+    if (updateErr && (updateErr.message?.includes('partidas_status_check') || updateErr.code === '23514')) {
+      console.warn('[acceptChallenge] Tentando fallback para status legado CONFIRMADA:', updateErr);
+      const { error: fallbackErr } = await db
+        .from('partidas')
+        .update({
+          status: 'CONFIRMADA'
+        })
+        .eq('id', matchId);
+      updateErr = fallbackErr;
+    }
+
+    if (updateErr) {
+      console.error('[Supabase acceptChallenge Error]:', updateErr);
+      fail('Erro ao aceitar desafio', updateErr);
+    }
+
+    // Se a reserva tiver nome_convidado genérico, atualizar com o nome real
+    if (match.reserva_id) {
+      try {
+        const { data: accepter } = await db.from('usuarios').select('nome').eq('id', userId).single();
+        await db
+          .from('reservas')
+          .update({
+            nome_convidado: accepter?.nome || 'Adversário confirmado'
+          })
+          .eq('id', match.reserva_id);
+      } catch (rErr) {
+        console.warn('Erro ao atualizar nome do adversário na reserva:', rErr);
+      }
+    }
+
+    // Notificar o desafiante (jogador 1)
+    try {
+      const { data: accepter } = await db.from('usuarios').select('nome').eq('id', userId).single();
+      const accepterName = accepter?.nome || 'Seu adversário';
+      const dataStr = match.reserva?.data ? ` para o dia ${match.reserva.data}` : '';
+      const horaStr = match.reserva?.horario?.hora_inicio ? ` às ${match.reserva.horario.hora_inicio.substring(0, 5)}` : '';
+
+      await this.createNotification(
+        match.grupo_id,
+        match.jogador_1_id,
+        'Desafio Aceito! 🎾',
+        `${accepterName} aceitou seu desafio${dataStr}${horaStr}. O jogo está confirmado na agenda!`,
+        'DESAFIO_ACEITO'
+      );
+    } catch (notifErr) {
+      console.warn('Erro ao disparar notificação de desafio aceito:', notifErr);
+    }
+  },
+
+  async rejectChallenge(matchId: string, userId: string, motivo?: string): Promise<void> {
+    const db = requireDb();
+    const { data: match, error: fetchErr } = await db
+      .from('partidas')
+      .select(`
+        *,
+        jogador_1:usuarios!partidas_jogador_1_id_fkey(*),
+        jogador_2:usuarios!partidas_jogador_2_id_fkey(*),
+        reserva:reservas(*, quadra:quadras(*), horario:horarios(*))
+      `)
+      .eq('id', matchId)
+      .single();
+
+    if (fetchErr || !match) {
+      fail('Partida não encontrada para recusa', fetchErr);
+    }
+
+    if (match.jogador_2_id !== userId) {
+      throw new Error('Apenas o jogador desafiado pode recusar este desafio.');
+    }
+
+    if (!['PENDENTE', 'AGUARDANDO_ACEITE'].includes(match.status)) {
+      throw new Error('Este desafio já foi respondido ou não está mais pendente.');
+    }
+
+    // 1. Atualizar status da partida para RECUSADA (com fallback para CANCELADA se necessário)
+    let { error: updateErr } = await db
+      .from('partidas')
+      .update({
+        status: 'RECUSADA'
+      })
+      .eq('id', matchId);
+
+    if (updateErr) {
+      console.warn('Fallback para CANCELADA ao recusar partida:', updateErr);
+      const { error: fallbackErr } = await db
+        .from('partidas')
+        .update({ status: 'CANCELADA' })
+        .eq('id', matchId);
+      if (fallbackErr) {
+        console.error('[Supabase rejectChallenge Error]:', fallbackErr);
+        fail('Erro ao recusar desafio', fallbackErr);
+      }
+    }
+
+    // 2. Liberar a quadra e o horário cancelando a reserva
+    if (match.reserva_id) {
+      try {
+        await this.cancelBooking(match.reserva_id, userId, 'JOGADOR', true);
+      } catch (cancelErr) {
+        console.warn('Erro ao cancelar reserva vinculada ao desafio recusado:', cancelErr);
+      }
+    }
+
+    // 3. Notificar o desafiante (jogador 1)
+    try {
+      const { data: rejecter } = await db.from('usuarios').select('nome').eq('id', userId).single();
+      const rejecterName = rejecter?.nome || 'Seu adversário';
+      const motivoText = motivo ? ` Motivo: ${motivo}` : '';
+      const dataStr = match.reserva?.data ? ` para o dia ${match.reserva.data}` : '';
+
+      await this.createNotification(
+        match.grupo_id,
+        match.jogador_1_id,
+        'Desafio Recusado',
+        `${rejecterName} não pôde aceitar seu desafio${dataStr}.${motivoText} A quadra e o horário foram liberados.`,
+        'DESAFIO_RECUSADO'
+      );
+    } catch (notifErr) {
+      console.warn('Erro ao disparar notificação de desafio recusado:', notifErr);
     }
   },
 
@@ -1943,7 +2464,7 @@ export const DbService = {
         jogador_1:usuarios!partidas_jogador_1_id_fkey(*),
         jogador_2:usuarios!partidas_jogador_2_id_fkey(*),
         vencedor:usuarios!partidas_vencedor_id_fkey(*),
-        reserva:reservas(*, quadra:quadras(*), horario:horarios(*), criador:usuarios!reservas_criador_id_fkey(*), adversario:usuarios!reservas_adversario_id_fkey(*)),
+        reserva:reservas(*, quadra:quadras(*), horario:horarios(*), criador:usuarios!reservas_criador_id_fkey(*)),
         partida_sets(*),
         partida_curtidas(id, usuario_id)
       `)

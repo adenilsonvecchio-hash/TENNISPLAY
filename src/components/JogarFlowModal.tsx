@@ -178,6 +178,21 @@ export const JogarFlowModal: React.FC<JogarFlowModalProps> = ({
     setIsSubmitting(true);
 
     try {
+      const opponentUserId = selectedOpponent.usuario_id || selectedOpponent.usuario?.id;
+      if (!opponentUserId) {
+        throw new Error('Não foi possível identificar o ID do adversário selecionado.');
+      }
+
+      console.log('[DEBUG Criar Desafio]', {
+        jogador_1_id: user.id,
+        jogador_2_id: opponentUserId,
+        selectedOpponent_membro_id: selectedOpponent.id,
+        selectedOpponent_usuario_id: selectedOpponent.usuario_id,
+        selectedOpponent_obj_id: selectedOpponent.usuario?.id,
+        status: 'PENDENTE',
+        grupo_id: activeGroup.id
+      });
+
       // 1. Criar a reserva real no sistema
       const booking = await DbService.createBooking({
         grupo_id: activeGroup.id,
@@ -191,21 +206,26 @@ export const JogarFlowModal: React.FC<JogarFlowModalProps> = ({
         jogador_classe: myClass
       });
 
-      // 2. Criar a partida vinculada
+      // 2. Criar a partida vinculada com status PENDENTE
       const match = await DbService.createMatch({
         grupoId: activeGroup.id,
         reservaId: booking.id,
         jogador1Id: user.id,
-        jogador2Id: selectedOpponent.usuario_id,
-        status: 'CONFIRMADA'
+        jogador2Id: opponentUserId,
+        status: 'PENDENTE'
       });
 
-      toast.success('Partida e reserva confirmadas com sucesso! 🎾');
+      const oppName = selectedOpponent.usuario?.nome || 'seu adversário';
+      toast.success(`Desafio enviado para ${oppName}! Horário reservado e aguardando aceite. 🎾`);
       onSuccess(match.id);
       onClose();
     } catch (err: any) {
-      console.error('Erro ao agendar partida:', err);
-      toast.error(err.message || 'Erro ao agendar partida.');
+      console.error('Erro ao agendar partida / criar desafio:', err);
+      const isConstraintErr = err.message?.includes('violates check constraint') || err.message?.includes('partidas_status_check');
+      const userMessage = isConstraintErr
+        ? 'Não foi possível enviar o desafio. Tente novamente.'
+        : (err.message || 'Não foi possível enviar o desafio. Tente novamente.');
+      toast.error(userMessage);
     } finally {
       setIsSubmitting(false);
     }
