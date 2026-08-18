@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Partida, AuthSession } from '../types';
 import { DbService } from '../lib/db';
 import { toast } from '../lib/toast';
@@ -28,6 +28,30 @@ interface SetRow {
   j2Games: number;
 }
 
+function formatPlayerName(name?: string | null): string {
+  if (!name) return '';
+  const trimmed = name.trim();
+  if (!trimmed) return '';
+
+  return trimmed
+    .toLowerCase()
+    .split(/\s+/)
+    .map((word) => {
+      const lower = word.toLowerCase();
+      if (['de', 'da', 'do', 'dos', 'das', 'e'].includes(lower)) {
+        return lower;
+      }
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    })
+    .join(' ');
+}
+
+function getPlayerInitial(name?: string | null): string {
+  if (!name) return '?';
+  const trimmed = name.trim();
+  return trimmed ? trimmed.charAt(0).toUpperCase() : '?';
+}
+
 export const InformarResultadoModal: React.FC<InformarResultadoModalProps> = ({
   partida,
   session,
@@ -49,10 +73,29 @@ export const InformarResultadoModal: React.FC<InformarResultadoModalProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // Estados de erro para imagens dos jogadores
+  const [j1ImgError, setJ1ImgError] = useState(false);
+  const [j2ImgError, setJ2ImgError] = useState(false);
+
+  // Resetar erros de imagem quando a partida mudar ou o modal abrir
+  useEffect(() => {
+    setJ1ImgError(false);
+    setJ2ImgError(false);
+  }, [partida.id, isOpen]);
+
   if (!isOpen || !user || !activeGroup) return null;
 
-  const j1Name = partida.jogador_1?.nome || 'Jogador 1';
-  const j2Name = partida.jogador_2?.nome || 'Jogador 2';
+  const rawJ1Name = partida.jogador_1?.nome || 'Jogador 1';
+  const rawJ2Name = partida.jogador_2?.nome || 'Jogador 2';
+
+  const j1Name = formatPlayerName(rawJ1Name) || 'Jogador 1';
+  const j2Name = formatPlayerName(rawJ2Name) || 'Jogador 2';
+
+  const j1Photo = (partida.jogador_1 as any)?.foto_url || (partida.jogador_1 as any)?.avatar_url || null;
+  const j2Photo = (partida.jogador_2 as any)?.foto_url || (partida.jogador_2 as any)?.avatar_url || null;
+
+  const j1Initial = getPlayerInitial(j1Name);
+  const j2Initial = getPlayerInitial(j2Name);
 
   // Contagem de sets ganhos
   let setsJ1 = 0;
@@ -147,16 +190,18 @@ export const InformarResultadoModal: React.FC<InformarResultadoModalProps> = ({
         isAdminOrOwner
       });
 
+      const opponentFormattedName = user.id === partida.jogador_1_id ? j2Name : j1Name;
+
       toast.success(
         isAdminOrOwner
           ? 'Resultado e placar oficializados com sucesso!'
-          : 'Resultado enviado! Seu adversário foi notificado para confirmar.'
+          : `Resultado enviado para confirmação de ${opponentFormattedName}.`
       );
       onSuccess();
       onClose();
     } catch (err: any) {
-      console.error('Erro ao salvar resultado:', err);
-      setErrorMessage(err.message || 'Erro ao registrar resultado da partida.');
+      console.error('Erro ao enviar resultado da partida:', err);
+      setErrorMessage(err.message || 'Não foi possível enviar o resultado. Tente novamente.');
     } finally {
       setIsSubmitting(false);
     }
@@ -199,18 +244,77 @@ export const InformarResultadoModal: React.FC<InformarResultadoModalProps> = ({
           )}
 
           {/* PLAYERS CARD */}
-          <div className="grid grid-cols-2 gap-3 p-4 rounded-2xl bg-slate-50 border border-slate-200/80 text-center">
-            <div>
-              <span className="text-[10px] font-extrabold uppercase text-slate-400">Jogador 1</span>
-              <p className="text-sm font-black text-slate-900 truncate">{j1Name}</p>
-              <span className="inline-block mt-1 text-xs font-black px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 p-4 sm:p-5 rounded-2xl bg-slate-50 border border-slate-200/80 text-center">
+            {/* JOGADOR 1 */}
+            <div className="flex flex-col items-center justify-between min-w-0 space-y-2.5">
+              <div className="flex flex-col items-center space-y-2 w-full">
+                {/* Foto do Jogador 1 */}
+                <div className="relative w-[56px] h-[56px] sm:w-[64px] sm:h-[64px] shrink-0">
+                  {j1Photo && !j1ImgError ? (
+                    <img
+                      src={j1Photo}
+                      alt={j1Name}
+                      onError={() => setJ1ImgError(true)}
+                      className="w-full h-full rounded-full object-cover object-center border-[3px] border-[#0F172A] shadow-xs"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="w-full h-full rounded-full bg-[#0F172A] text-white border-[3px] border-[#0F172A] flex items-center justify-center font-black text-lg sm:text-xl shadow-xs">
+                      {j1Initial}
+                    </div>
+                  )}
+                </div>
+
+                {/* Identificação e Nome */}
+                <div className="w-full px-1">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">
+                    Jogador 1
+                  </span>
+                  <h3 className="text-xs sm:text-sm font-black text-slate-900 line-clamp-2 break-words leading-tight mt-0.5 text-center">
+                    {j1Name}
+                  </h3>
+                </div>
+              </div>
+
+              {/* Contagem de Sets */}
+              <span className="inline-block text-[11px] sm:text-xs font-black px-2.5 py-0.5 rounded-full bg-slate-200 text-slate-700">
                 {setsJ1} {setsJ1 === 1 ? 'set' : 'sets'}
               </span>
             </div>
-            <div>
-              <span className="text-[10px] font-extrabold uppercase text-slate-400">Jogador 2</span>
-              <p className="text-sm font-black text-slate-900 truncate">{j2Name}</p>
-              <span className="inline-block mt-1 text-xs font-black px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
+
+            {/* JOGADOR 2 */}
+            <div className="flex flex-col items-center justify-between min-w-0 space-y-2.5">
+              <div className="flex flex-col items-center space-y-2 w-full">
+                {/* Foto do Jogador 2 */}
+                <div className="relative w-[56px] h-[56px] sm:w-[64px] sm:h-[64px] shrink-0">
+                  {j2Photo && !j2ImgError ? (
+                    <img
+                      src={j2Photo}
+                      alt={j2Name}
+                      onError={() => setJ2ImgError(true)}
+                      className="w-full h-full rounded-full object-cover object-center border-[3px] border-[#ccff00] shadow-xs"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="w-full h-full rounded-full bg-slate-900 text-[#ccff00] border-[3px] border-[#ccff00] flex items-center justify-center font-black text-lg sm:text-xl shadow-xs">
+                      {j2Initial}
+                    </div>
+                  )}
+                </div>
+
+                {/* Identificação e Nome */}
+                <div className="w-full px-1">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">
+                    Jogador 2
+                  </span>
+                  <h3 className="text-xs sm:text-sm font-black text-slate-900 line-clamp-2 break-words leading-tight mt-0.5 text-center">
+                    {j2Name}
+                  </h3>
+                </div>
+              </div>
+
+              {/* Contagem de Sets */}
+              <span className="inline-block text-[11px] sm:text-xs font-black px-2.5 py-0.5 rounded-full bg-slate-200 text-slate-700">
                 {setsJ2} {setsJ2 === 1 ? 'set' : 'sets'}
               </span>
             </div>

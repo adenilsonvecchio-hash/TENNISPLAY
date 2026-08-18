@@ -1,298 +1,350 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   UsersRound,
   PlusCircle,
   LogIn,
-  User,
-  CalendarDays,
+  Download,
   ChevronRight
 } from 'lucide-react';
-import { AppLogo } from './AppLogo';
-import { AuthSession } from '../types';
-import heroBannerImg from '../assets/images/tennis_player_hd_1786707992007.jpg';
+import { usePwaInstall } from '../hooks/usePwaInstall';
+import { IosInstallModal } from './IosInstallModal';
+import manTennisWebp from '../assets/images/tennis_man_player.webp';
+import womanTennisWebp from '../assets/images/tennis_woman_player.webp';
+import ballLogoImg from '../assets/images/realistic_tennis_ball_1786391824933.jpg';
 
 interface HomeLandingProps {
   onSelectAction: (action: 'OWNER_REGISTER' | 'ADMIN_LOGIN' | 'PLAYER_REGISTER' | 'LOGIN') => void;
   onOpenSupabaseModal?: () => void;
   onOpenManualPdf?: () => void;
-  session?: AuthSession | null;
-  onNavigateTab?: (tab: string) => void;
-  onLogout?: () => void;
 }
 
 export const HomeLanding: React.FC<HomeLandingProps> = ({
   onSelectAction,
-  session,
-  onNavigateTab,
-  onLogout,
 }) => {
-  const isAuth = !!session?.user;
+  const { showInstallButton, triggerInstall } = usePwaInstall();
+  const [showIosModal, setShowIosModal] = useState<boolean>(false);
+  const [activeSlide, setActiveSlide] = useState<0 | 1>(0);
+
+  // Alternância contínua a cada 6 segundos
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setActiveSlide((prev) => (prev === 0 ? 1 : 0));
+    }, 6000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const handleInstallClick = async () => {
+    const result = await triggerInstall();
+    if (result === 'ios') {
+      setShowIosModal(true);
+    }
+  };
+
+  const isThemeOrange = activeSlide === 1;
 
   return (
-    <div className="min-h-screen bg-[#faf9f6] flex flex-col justify-start text-slate-900 font-sans selection:bg-[#ccff00] selection:text-slate-950 overflow-x-hidden md:overflow-visible box-border pb-[82px] md:pb-0">
-      {/* Header (Approx 58px) */}
-      <header className="w-full bg-white/95 backdrop-blur-md border-b border-slate-200 sticky top-0 z-30 shrink-0 h-[58px] flex items-center">
-        <div className="w-full max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-2">
+    <div
+      className={`landing-root-container h-[100svh] max-h-[100svh] w-full overflow-hidden flex flex-col box-border selection:bg-[#C7FF00] selection:text-[#0D172D] transition-colors duration-800 ${
+        isThemeOrange ? 'bg-[#F4F3FC]' : 'bg-[#faf9f6]'
+      }`}
+    >
+      {/* 1. CABEÇALHO COMPACTO NO TOPO */}
+      <header className="w-full bg-white/95 backdrop-blur-md border-b border-slate-200/90 shrink-0 h-[52px] sm:h-[58px] md:h-[64px] max-h-[72px] flex items-center z-20 px-4 sm:px-6 lg:px-8">
+        <div className="w-full max-w-[1400px] mx-auto flex items-center justify-between gap-3">
+          
+          {/* Somente o símbolo da bola à esquerda */}
           <div className="flex items-center shrink-0">
-            <AppLogo size="sm" />
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-[#0D172D] p-0.5 border border-slate-700 shadow-2xs flex items-center justify-center overflow-hidden shrink-0">
+              <img
+                src={ballLogoImg}
+                alt="TennisPlay"
+                className="w-full h-full object-cover rounded-lg"
+                referrerPolicy="no-referrer"
+              />
+            </div>
           </div>
 
+          {/* Botão Entrar */}
           <div className="flex items-center gap-2">
-            {!isAuth ? (
-              <button
-                type="button"
-                onClick={() => onSelectAction('LOGIN')}
-                className="flex items-center gap-1.5 px-3.5 sm:px-4 py-1.5 rounded-2xl bg-[#ccff00] hover:bg-[#b2e600] text-slate-950 text-xs sm:text-sm font-extrabold shadow-sm shadow-[#ccff00]/40 transition-all hover:scale-[1.02] active:scale-[0.98] whitespace-nowrap cursor-pointer"
-              >
-                <LogIn className="w-4 h-4 text-slate-950 shrink-0" />
-                <span>Entrar</span>
-              </button>
-            ) : (
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-slate-600 hidden sm:inline">
-                  Olá, <strong className="text-slate-900">{session?.user?.nome}</strong>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => onNavigateTab?.('agenda')}
-                  className="px-3.5 py-1.5 rounded-2xl bg-[#0F172A] hover:bg-slate-800 text-white text-xs sm:text-sm font-bold shadow-sm transition-all cursor-pointer"
-                >
-                  Acessar Painel
-                </button>
-              </div>
-            )}
+            <button
+              type="button"
+              onClick={() => onSelectAction('LOGIN')}
+              className={`flex items-center gap-1.5 px-3.5 sm:px-4 py-1.5 sm:py-2 rounded-xl text-[#0D172D] text-xs sm:text-sm font-black shadow-2xs hover:shadow-xs transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] whitespace-nowrap cursor-pointer ${
+                isThemeOrange
+                  ? 'bg-[#FFAD66] hover:bg-[#FF914D]'
+                  : 'bg-[#C7FF00] hover:bg-[#b5ea00]'
+              }`}
+            >
+              <LogIn className="w-4 h-4 text-[#0D172D] shrink-0 stroke-[2.4]" />
+              <span>Entrar</span>
+            </button>
           </div>
         </div>
       </header>
 
-      {/* Main Content Area - Positioned 12px to 16px below header */}
-      <main className="w-full max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pt-3.5 pb-4 md:py-8 flex flex-col items-center justify-start min-h-0 flex-1">
+      {/* 2. CONTEÚDO PRINCIPAL (height: calc(100svh - 64px)) */}
+      <main className="flex-1 min-h-0 w-full overflow-hidden p-2 sm:p-3 md:p-4 lg:p-6 max-w-[1400px] mx-auto box-border flex flex-col md:grid md:grid-cols-[minmax(0,58%)_minmax(360px,42%)] md:gap-5 lg:gap-8">
         
-        {/* MOBILE HERO BANNER (< 768px) - Full tennis player photograph (expanded to utilize available space) */}
-        <section className="w-full md:hidden overflow-hidden rounded-2xl shadow-xs border border-slate-200/80 bg-[#0d172b] relative shrink-0">
-          <div className="w-full mobile-hero-photo-container relative overflow-hidden bg-[#0d172b] flex items-center justify-center">
-            <img
-              src={heroBannerImg}
-              alt="Tenista em quadra de tênis"
-              referrerPolicy="no-referrer"
-              loading="eager"
-              decoding="async"
-              className="w-full h-full object-cover"
-              style={{
-                objectPosition: '75% center',
-                imageRendering: 'auto',
-              }}
-            />
-          </div>
-        </section>
-
-        {/* MOBILE CENTRAL TITLE ONLY (< 768px) */}
-        <div className="w-full text-center mt-3.5 sm:mt-4 mb-2 md:hidden">
-          <h2 className="text-[19px] sm:text-[21px] font-black text-slate-900 tracking-tight leading-tight">
-            Como você quer começar?
-          </h2>
-        </div>
-
-        {/* DESKTOP HERO BANNER (>= 768px) - Preserved with text, badge, button and image */}
-        <section className="hidden md:flex w-full overflow-hidden rounded-3xl shadow-2xl border border-slate-800/80 mb-8 bg-[#0F172A] flex-row items-stretch min-h-[460px] lg:min-h-[500px] xl:min-h-[540px] relative shrink-0">
+        {/* LADO ESQUERDO: CARROSSEL HERO COM POSITION ABSOLUTE E CROSS-FADE DE 900MS */}
+        <section className="hero relative w-full h-[34%] sm:h-[36%] md:h-full min-h-0 rounded-2xl md:rounded-3xl overflow-hidden bg-slate-950 border border-slate-200/80 shadow-xs shrink-0 md:shrink">
           
-          {/* DESKTOP IMAGE CONTAINER (Right ~50-54%) */}
-          <div className="absolute right-0 top-0 bottom-0 w-[50%] lg:w-[52%] xl:w-[54%] h-full z-0 overflow-hidden bg-slate-900">
-            <img
-              src={heroBannerImg}
-              alt="Tenista em quadra real de tênis"
-              referrerPolicy="no-referrer"
-              loading="eager"
-              decoding="async"
-              className="w-full h-full object-cover"
-              style={{
-                objectPosition: '90% center',
-                transform: 'scale(1.12) translateX(-6%)',
-                transformOrigin: 'center',
-                imageRendering: 'auto',
-              }}
-            />
-            {/* Smooth soft gradient ONLY between text area on left and image on right */}
-            <div className="absolute inset-y-0 left-0 w-32 bg-gradient-to-r from-[#0F172A] to-transparent pointer-events-none" />
-          </div>
+          {/* SLIDE 1: HOMEM JOGANDO TÊNIS (Tema Azul-Marinho / Verde-Limão) */}
+          <img
+            src={manTennisWebp}
+            alt="Homem jogando tênis"
+            referrerPolicy="no-referrer"
+            loading="eager"
+            decoding="async"
+            className={`hero-slide absolute inset-0 w-full h-full object-cover transition-opacity duration-900 ease-in-out ${
+              activeSlide === 0 ? 'active opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+            }`}
+            style={{
+              objectPosition: window.innerWidth < 768 ? '58% center' : 'center center',
+              imageRendering: 'auto',
+            }}
+          />
 
-          {/* TEXT CONTENT CONTAINER */}
-          <div className="relative z-10 w-[55%] lg:w-[50%] xl:w-[48%] p-8 lg:p-12 xl:p-14 flex flex-col items-start justify-center text-left space-y-5 lg:space-y-6 bg-[#0F172A]">
-            
-            {/* Subtle Badge */}
-            <div className="inline-flex items-center justify-center gap-1.5 sm:gap-2 px-3 py-1 sm:px-3.5 sm:py-1.5 rounded-full bg-[#ccff00]/15 border border-[#ccff00]/30 backdrop-blur-md">
-              <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-[#ccff00] animate-pulse shrink-0" />
-              <span className="text-[#ccff00] font-bold text-[10px] sm:text-xs tracking-wider uppercase whitespace-nowrap leading-none text-center">
-                Sistema de Quadras
-              </span>
-            </div>
-
-            {/* Main Requested Title */}
-            <h1 className="text-3xl lg:text-5xl xl:text-6xl font-black text-white tracking-tight leading-[1.1] drop-shadow-sm">
-              Seu próximo jogo <br />
-              <span className="text-[#ccff00] font-black">começa aqui.</span>
-            </h1>
-
-            {/* Requested Description Text */}
-            <p className="text-sm lg:text-lg text-slate-200 font-medium leading-relaxed">
-              Reserve horários, encontre jogadores da sua classe e entre em quadra.
-            </p>
-
-            {/* Action Button */}
-            <div className="pt-2 w-full lg:w-auto">
-              <button
-                type="button"
-                onClick={() => {
-                  if (isAuth) {
-                    onNavigateTab?.('agenda');
-                  } else {
-                    onSelectAction('LOGIN');
-                  }
-                }}
-                className="w-full lg:w-auto flex items-center justify-center gap-2.5 px-7 py-4 rounded-2xl bg-[#ccff00] hover:bg-[#b5e600] text-slate-950 font-black text-base shadow-xl shadow-[#ccff00]/25 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
-              >
-                <CalendarDays className="w-5 h-5 text-slate-950 stroke-[2.5]" />
-                <span>Agendar Horário</span>
-              </button>
-            </div>
-
-          </div>
+          {/* SLIDE 2: MULHER JOGANDO TÊNIS (Tema Laranja / Lilás) */}
+          <img
+            src={womanTennisWebp}
+            alt="Mulher jogando tênis"
+            referrerPolicy="no-referrer"
+            loading="eager"
+            decoding="async"
+            className={`hero-slide absolute inset-0 w-full h-full object-cover transition-opacity duration-900 ease-in-out ${
+              activeSlide === 1 ? 'active opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+            }`}
+            style={{
+              objectPosition: window.innerWidth < 768 ? '62% center' : 'center center',
+              imageRendering: 'auto',
+            }}
+          />
         </section>
 
-        {/* DESKTOP Como você quer começar? Section (>= 768px) */}
-        <section className="hidden md:flex w-full max-w-[1050px] flex-col justify-start mb-8">
-          <div className="text-center mb-6">
-            <h2 className="text-2xl font-black text-slate-900 tracking-tight leading-tight">
-              Como você quer começar?
-            </h2>
-            <p className="text-sm text-slate-600 font-medium mt-1">
-              Escolha uma das opções para acessar o sistema
-            </p>
-          </div>
-
-          <div className="grid grid-cols-3 gap-5">
+        {/* LADO DIREITO: PAINEL DE ACESSO */}
+        <section
+          className={`right-column flex-1 md:flex-initial h-[66%] sm:h-[64%] md:h-full min-h-0 flex items-center justify-center overflow-hidden py-1 sm:py-2 px-1 sm:px-3 md:px-4 transition-colors duration-800 ${
+            isThemeOrange ? 'bg-[#F4F3FC]' : 'bg-transparent'
+          }`}
+        >
+          
+          {/* CARTÃO CENTRAL ESTILO APLICATIVO */}
+          <div
+            className={`w-full max-w-[440px] max-h-[calc(100svh-90px)] md:max-h-[calc(100svh-120px)] bg-white rounded-[24px] sm:rounded-[30px] shadow-xl md:shadow-2xl border overflow-hidden flex flex-col my-auto transition-all duration-800 ${
+              isThemeOrange ? 'border-[#D9D8F2]/70 shadow-[#FF914D]/10' : 'border-slate-200/80 shadow-slate-900/10'
+            }`}
+          >
             
-            {/* 1. Entrar em um grupo */}
-            <button
-              type="button"
-              onClick={() => onSelectAction('PLAYER_REGISTER')}
-              className="w-full bg-white rounded-2xl p-6 border border-slate-200 shadow-2xs hover:border-[#0F172A] hover:shadow-xs active:scale-[0.98] transition-all cursor-pointer flex flex-col items-start text-left group shrink-0"
+            {/* CABEÇALHO CURVO ORGÂNICO */}
+            <div
+              className={`relative text-white pt-4 sm:pt-5 md:pt-6 pb-6 sm:pb-7 px-4 sm:px-6 flex flex-col items-center text-center shrink-0 overflow-hidden transition-all duration-800 ${
+                isThemeOrange
+                  ? 'bg-gradient-to-br from-[#FF914D] via-[#FFA35C] to-[#FFAD66]'
+                  : 'bg-[#0D172D]'
+              }`}
             >
-              <div className="w-12 h-12 rounded-xl bg-[#0F172A] text-[#ccff00] border border-slate-800 flex items-center justify-center shrink-0 mb-4 group-hover:scale-105 transition-transform shadow-2xs">
-                <UsersRound className="w-6 h-6" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h3 className="text-base font-extrabold text-slate-900 group-hover:text-slate-950 transition-colors whitespace-normal">
-                  Entrar em um grupo
-                </h3>
-                <p className="text-xs text-slate-600 font-medium mt-1 line-clamp-2 leading-relaxed">
-                  Use o código do seu grupo para participar.
-                </p>
-              </div>
-            </button>
+              
+              {/* Linhas decorativas */}
+              <svg className="absolute inset-0 w-full h-full pointer-events-none opacity-20" viewBox="0 0 400 200" fill="none">
+                <path
+                  d="M-20,160 Q120,30 260,110 T440,40"
+                  stroke={isThemeOrange ? '#FFFFFF' : '#C7FF00'}
+                  strokeWidth="2.5"
+                  strokeDasharray="6 6"
+                />
+                <circle cx="340" cy="55" r="4" fill={isThemeOrange ? '#FFFFFF' : '#C7FF00'} />
+              </svg>
 
-            {/* 2. Criar um grupo */}
-            <button
-              type="button"
-              onClick={() => onSelectAction('OWNER_REGISTER')}
-              className="w-full bg-white rounded-2xl p-6 border border-slate-200 shadow-2xs hover:border-[#0F172A] hover:shadow-xs active:scale-[0.98] transition-all cursor-pointer flex flex-col items-start text-left group shrink-0"
-            >
-              <div className="w-12 h-12 rounded-xl bg-[#0F172A] text-[#ccff00] border border-slate-800 flex items-center justify-center shrink-0 mb-4 group-hover:scale-105 transition-transform shadow-2xs">
-                <PlusCircle className="w-5 h-5 md:w-6 md:h-6" />
+              {/* ÍCONE GRANDE DO TENNISPLAY */}
+              <div
+                className={`relative z-10 w-[68px] h-[68px] sm:w-[84px] sm:h-[84px] md:w-[96px] md:h-[96px] rounded-[20px] sm:rounded-[26px] md:rounded-[28px] p-1.5 sm:p-2 shadow-lg flex items-center justify-center mb-2 sm:mb-3 shrink-0 transform hover:scale-105 transition-all duration-800 ${
+                  isThemeOrange
+                    ? 'bg-white shadow-[#FF914D]/30 border border-white/60'
+                    : 'bg-[#C7FF00] shadow-[#0D172D]/20'
+                }`}
+              >
+                <svg className="w-full h-full drop-shadow-xs" viewBox="0 0 100 100" fill="none">
+                  <circle cx="50" cy="50" r="42" fill="#0D172D" />
+                  <path
+                    d="M 12 30 C 38 34, 38 66, 12 70"
+                    stroke={isThemeOrange ? '#FF914D' : '#C7FF00'}
+                    strokeWidth="6"
+                    strokeLinecap="round"
+                  />
+                  <path
+                    d="M 88 30 C 62 34, 62 66, 88 70"
+                    stroke={isThemeOrange ? '#FF914D' : '#C7FF00'}
+                    strokeWidth="6"
+                    strokeLinecap="round"
+                  />
+                </svg>
               </div>
-              <div className="flex-1 min-w-0">
-                <h3 className="text-base font-extrabold text-slate-900 group-hover:text-slate-950 transition-colors whitespace-normal">
-                  Criar um grupo
-                </h3>
-                <p className="text-xs text-slate-600 font-medium mt-1 line-clamp-2 leading-relaxed">
-                  Cadastre seu clube, condomínio ou turma.
-                </p>
-              </div>
-            </button>
 
-            {/* 3. Já tenho uma conta */}
-            <button
-              type="button"
-              onClick={() => onSelectAction('LOGIN')}
-              className="w-full bg-white rounded-2xl p-6 border border-slate-200 shadow-2xs hover:border-[#0F172A] hover:shadow-xs active:scale-[0.98] transition-all cursor-pointer flex flex-col items-start text-left group shrink-0"
-            >
-              <div className="w-12 h-12 rounded-xl bg-[#0F172A] text-[#ccff00] border border-slate-800 flex items-center justify-center shrink-0 mb-4 group-hover:scale-105 transition-transform shadow-2xs">
-                <LogIn className="w-6 h-6" />
+              {/* NOME DA MARCA */}
+              <div className="relative z-10 font-logo font-black text-xl sm:text-2xl md:text-[28px] tracking-tight uppercase leading-none flex items-center justify-center gap-0.5">
+                <span className="text-white drop-shadow-xs">TENNIS</span>
+                <span
+                  className="text-[#C7FF00] drop-shadow-xs"
+                  style={{
+                    WebkitTextStroke: isThemeOrange ? '1.2px #0D172D' : '0px',
+                    paintOrder: 'stroke fill',
+                  }}
+                >
+                  PLAY
+                </span>
               </div>
-              <div className="flex-1 min-w-0">
-                <h3 className="text-base font-extrabold text-slate-900 group-hover:text-slate-950 transition-colors whitespace-normal">
-                  Já tenho uma conta
-                </h3>
-                <p className="text-xs text-slate-600 font-medium mt-1 line-clamp-2 leading-relaxed">
-                  Entre para acessar agenda e reservas.
-                </p>
+
+              {/* FRASE INSPIRACIONAL */}
+              <p className="relative z-10 text-[11px] sm:text-xs text-white/90 font-medium tracking-wide mt-1 leading-none">
+                Seu jogo começa aqui.
+              </p>
+
+              {/* CURVA ORGÂNICA EM SVG */}
+              <div className="absolute -bottom-1 left-0 right-0 w-full overflow-hidden leading-none pointer-events-none">
+                <svg viewBox="0 0 500 40" preserveAspectRatio="none" className="relative block w-full h-[18px] sm:h-[22px] text-white fill-current">
+                  <path d="M0,0 C150,38 350,38 500,0 L500,40 L0,40 Z" />
+                </svg>
               </div>
-            </button>
+            </div>
+
+            {/* CORPO DO CARTÃO */}
+            <div className="p-3.5 sm:p-4 md:p-5 flex-1 flex flex-col justify-center overflow-hidden bg-white">
+              
+              <h2 className="text-center text-sm sm:text-base md:text-lg font-black text-[#0D172D] tracking-tight mb-2.5 sm:mb-3">
+                Comece agora
+              </h2>
+
+              <div className="flex flex-col gap-2 sm:gap-2.5 w-full">
+                
+                {/* 1. Entrar em um grupo */}
+                <button
+                  type="button"
+                  onClick={() => onSelectAction('PLAYER_REGISTER')}
+                  className={`w-full h-[50px] sm:h-[58px] md:h-[62px] active:scale-[0.99] hover:-translate-y-0.5 transition-all duration-300 rounded-[16px] sm:rounded-[18px] px-3 sm:px-4 border flex items-center justify-between group cursor-pointer ${
+                    isThemeOrange
+                      ? 'bg-[#EAE9F8] hover:bg-[#dedcf5] border-[#D9D8F2]'
+                      : 'bg-[#F5F7FA] hover:bg-[#ebf0f7] border-slate-200/70'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 sm:gap-3">
+                    <div
+                      className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-all duration-300 ${
+                        isThemeOrange
+                          ? 'bg-white text-[#FF914D] border border-[#D9D8F2]'
+                          : 'bg-[#C7FF00] text-[#0D172D]'
+                      }`}
+                    >
+                      <UsersRound className="w-4 h-4 sm:w-4.5 sm:h-4.5 stroke-[2.5]" />
+                    </div>
+                    <span className="text-xs sm:text-sm font-extrabold text-[#0D172D] tracking-tight">
+                      Entrar em um grupo
+                    </span>
+                  </div>
+                  <ChevronRight
+                    className={`w-4 h-4 transition-all duration-300 group-hover:translate-x-0.5 ${
+                      isThemeOrange
+                        ? 'text-[#FF914D] group-hover:text-[#0D172D]'
+                        : 'text-slate-400 group-hover:text-[#0D172D]'
+                    }`}
+                  />
+                </button>
+
+                {/* 2. Criar um grupo */}
+                <button
+                  type="button"
+                  onClick={() => onSelectAction('OWNER_REGISTER')}
+                  className={`w-full h-[50px] sm:h-[58px] md:h-[62px] active:scale-[0.99] hover:-translate-y-0.5 transition-all duration-300 rounded-[16px] sm:rounded-[18px] px-3 sm:px-4 border flex items-center justify-between group cursor-pointer ${
+                    isThemeOrange
+                      ? 'bg-[#EAE9F8] hover:bg-[#dedcf5] border-[#D9D8F2]'
+                      : 'bg-[#F5F7FA] hover:bg-[#ebf0f7] border-slate-200/70'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 sm:gap-3">
+                    <div
+                      className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-all duration-300 ${
+                        isThemeOrange
+                          ? 'bg-white text-[#FF914D] border border-[#D9D8F2]'
+                          : 'bg-[#C7FF00] text-[#0D172D]'
+                      }`}
+                    >
+                      <PlusCircle className="w-4 h-4 sm:w-4.5 sm:h-4.5 stroke-[2.5]" />
+                    </div>
+                    <span className="text-xs sm:text-sm font-extrabold text-[#0D172D] tracking-tight">
+                      Criar um grupo
+                    </span>
+                  </div>
+                  <ChevronRight
+                    className={`w-4 h-4 transition-all duration-300 group-hover:translate-x-0.5 ${
+                      isThemeOrange
+                        ? 'text-[#FF914D] group-hover:text-[#0D172D]'
+                        : 'text-slate-400 group-hover:text-[#0D172D]'
+                    }`}
+                  />
+                </button>
+
+                {/* 3. Já tenho uma conta */}
+                <button
+                  type="button"
+                  onClick={() => onSelectAction('LOGIN')}
+                  className={`w-full h-[52px] sm:h-[60px] md:h-[64px] active:scale-[0.99] hover:-translate-y-0.5 transition-all duration-300 rounded-[16px] sm:rounded-[18px] px-3 sm:px-4 flex items-center justify-between group cursor-pointer shadow-md ${
+                    isThemeOrange
+                      ? 'bg-gradient-to-r from-[#FF914D] to-[#FF8033] hover:from-[#f5833d] hover:to-[#f07424] text-white shadow-[#FF914D]/25'
+                      : 'bg-[#0D172D] hover:bg-[#142344] text-white shadow-[#0D172D]/15'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 sm:gap-3">
+                    <div
+                      className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center shrink-0 group-hover:scale-105 transition-all duration-300 ${
+                        isThemeOrange
+                          ? 'bg-white/20 text-white'
+                          : 'bg-white/10 text-[#C7FF00]'
+                      }`}
+                    >
+                      <LogIn className="w-4 h-4 sm:w-4.5 sm:h-4.5 stroke-[2.5]" />
+                    </div>
+                    <span className="text-xs sm:text-sm font-extrabold text-white tracking-tight">
+                      Já tenho uma conta
+                    </span>
+                  </div>
+                  <ChevronRight
+                    className={`w-4 h-4 transition-all duration-300 group-hover:translate-x-0.5 ${
+                      isThemeOrange ? 'text-white' : 'text-[#C7FF00]'
+                    }`}
+                  />
+                </button>
+
+                {/* Botão sutil de Instalar App */}
+                {showInstallButton && (
+                  <button
+                    type="button"
+                    onClick={handleInstallClick}
+                    className={`w-full py-1.5 sm:py-2 text-[11px] sm:text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                      isThemeOrange
+                        ? 'text-[#FF914D] hover:text-[#0D172D]'
+                        : 'text-slate-500 hover:text-[#0D172D]'
+                    }`}
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Instalar aplicativo na tela inicial</span>
+                  </button>
+                )}
+
+              </div>
+
+            </div>
 
           </div>
+
         </section>
 
       </main>
 
-      {/* MOBILE FIXED BOTTOM NAVIGATION BAR (< 768px) */}
-      <nav
-        aria-label="Navegação rápida"
-        className="mobile-bottom-navigation md:hidden bg-[#C8FF00] border-t border-[#0D172B]/15 rounded-t-2xl shadow-[0_-4px_24px_rgba(0,0,0,0.12)] overflow-hidden"
-      >
-        <div className="grid grid-cols-3 h-[72px] w-full max-w-lg mx-auto">
-          
-          {/* 1. Entrar no grupo */}
-          <button
-            type="button"
-            onClick={() => onSelectAction('PLAYER_REGISTER')}
-            className="w-full h-full flex flex-col items-center justify-center gap-1 text-[#0D172B] hover:bg-[#b8f000] active:bg-[#0D172B] active:text-[#C8FF00] transition-colors duration-150 cursor-pointer select-none px-1"
-          >
-            <UsersRound className="w-5 h-5 shrink-0 stroke-[2.4]" />
-            <span className="text-[11px] font-extrabold tracking-tight text-center leading-none whitespace-nowrap">
-              Entrar no grupo
-            </span>
-          </button>
+      {/* MODAL DE INSTRUÇÕES DE INSTALAÇÃO NO IPHONE / IPAD */}
+      <IosInstallModal
+        isOpen={showIosModal}
+        onClose={() => setShowIosModal(false)}
+      />
 
-          {/* 2. Criar grupo */}
-          <button
-            type="button"
-            onClick={() => onSelectAction('OWNER_REGISTER')}
-            className="w-full h-full flex flex-col items-center justify-center gap-1 text-[#0D172B] hover:bg-[#b8f000] active:bg-[#0D172B] active:text-[#C8FF00] transition-colors duration-150 cursor-pointer select-none px-1 border-x border-[#0D172B]/10"
-          >
-            <PlusCircle className="w-5 h-5 shrink-0 stroke-[2.4]" />
-            <span className="text-[11px] font-extrabold tracking-tight text-center leading-none whitespace-nowrap">
-              Criar grupo
-            </span>
-          </button>
-
-          {/* 3. Minha conta */}
-          <button
-            type="button"
-            onClick={() => {
-              if (isAuth) {
-                onNavigateTab?.('perfil');
-              } else {
-                onSelectAction('LOGIN');
-              }
-            }}
-            className="w-full h-full flex flex-col items-center justify-center gap-1 text-[#0D172B] hover:bg-[#b8f000] active:bg-[#0D172B] active:text-[#C8FF00] transition-colors duration-150 cursor-pointer select-none px-1"
-          >
-            <User className="w-5 h-5 shrink-0 stroke-[2.4]" />
-            <span className="text-[11px] font-extrabold tracking-tight text-center leading-none whitespace-nowrap">
-              Minha conta
-            </span>
-          </button>
-
-        </div>
-      </nav>
-
-      {/* Footer (Hidden on Mobile, Visible on Desktop) */}
-      <footer className="hidden md:flex w-full bg-white/80 backdrop-blur-md border-t border-slate-200 py-5">
-        <div className="max-w-[1200px] mx-auto px-4 flex items-center justify-center">
-          <AppLogo size="sm" />
-        </div>
-      </footer>
     </div>
   );
 };
-

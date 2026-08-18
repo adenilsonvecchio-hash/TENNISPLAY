@@ -1,7 +1,13 @@
 @import "tailwindcss";
 
 @layer base {
-  body {
+  *, ::before, ::after {
+    box-sizing: border-box;
+  }
+
+  html, body {
+    margin: 0;
+    padding: 0;
     background-color: #faf9f6;
     color: #0f172a;
     font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
@@ -16,46 +22,55 @@
   font-weight: 900;
 }
 
-/* Custom Soft Shadow Utilities with subtle orange glow */
-.shadow-lilac {
-  box-shadow: 0 10px 30px -5px rgba(236, 112, 0, 0.08), 0 4px 12px -2px rgba(236, 112, 0, 0.04);
+/* Transição suave de temas do painel */
+.theme-smooth-transition {
+  transition:
+    background-color 800ms ease,
+    color 500ms ease,
+    border-color 500ms ease,
+    box-shadow 500ms ease;
 }
 
-.shadow-lilac-hover {
-  box-shadow: 0 16px 36px -4px rgba(236, 112, 0, 0.18), 0 6px 16px -2px rgba(236, 112, 0, 0.1);
-}
-
-/* Mobile Hero Photo Height & Responsive Clamps */
-.mobile-hero-photo-container {
-  height: clamp(300px, 48dvh, 390px);
-}
-
-@media (max-width: 767px) and (max-height: 700px) {
-  .mobile-hero-photo-container {
-    height: clamp(270px, 43dvh, 320px) !important;
+/* Responsividade com media query de altura para tela compacta */
+@media (max-height: 700px) {
+  .landing-options-header {
+    margin-bottom: 4px !important;
+  }
+  .landing-options-subtitle {
+    display: none !important;
+  }
+  .landing-options-title {
+    font-size: 14px !important;
+  }
+  .landing-cards-container {
+    gap: 5px !important;
+  }
+  .landing-card {
+    padding: 5px 8px !important;
+  }
+  .landing-card-icon {
+    width: 30px !important;
+    height: 30px !important;
+  }
+  .landing-card-title {
+    font-size: 11.5px !important;
+  }
+  .landing-card-desc {
+    display: none !important;
   }
 }
 
-@media (max-width: 767px) and (min-height: 701px) and (max-height: 850px) {
-  .mobile-hero-photo-container {
-    height: clamp(320px, 48dvh, 380px) !important;
+@media (max-height: 600px) {
+  .landing-photo-panel {
+    height: 32% !important;
+  }
+  .landing-options-panel {
+    height: 68% !important;
+  }
+  .landing-cards-container {
+    gap: 4px !important;
+  }
+  .landing-card {
+    padding: 4px 6px !important;
   }
 }
-
-@media (max-width: 767px) and (min-height: 851px) {
-  .mobile-hero-photo-container {
-    height: clamp(370px, 50dvh, 450px) !important;
-  }
-}
-
-/* Fixed Mobile Bottom Navigation Bar */
-.mobile-bottom-navigation {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 1000;
-  padding-bottom: env(safe-area-inset-bottom);
-}
-
-

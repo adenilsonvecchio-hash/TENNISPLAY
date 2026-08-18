@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Partida, AuthSession } from '../types';
 import { DbService } from '../lib/db';
+import { formatAvatarUrlWithCacheBust } from '../lib/avatarImage';
 import { toast } from '../lib/toast';
 import {
   Trophy,
@@ -22,6 +23,16 @@ interface ConfirmarResultadoModalProps {
   onSuccess: () => void;
 }
 
+const formatPlayerName = (name?: string | null): string => {
+  if (!name) return 'Jogador';
+  return name
+    .toLowerCase()
+    .split(' ')
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+};
+
 export const ConfirmarResultadoModal: React.FC<ConfirmarResultadoModalProps> = ({
   partida,
   session,
@@ -39,11 +50,32 @@ export const ConfirmarResultadoModal: React.FC<ConfirmarResultadoModalProps> = (
   const [correctionReason, setCorrectionReason] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const [j1ImgError, setJ1ImgError] = useState(false);
+  const [j2ImgError, setJ2ImgError] = useState(false);
+
   if (!isOpen || !user || !activeGroup) return null;
 
-  const j1Name = partida.jogador_1?.nome || 'Jogador 1';
-  const j2Name = partida.jogador_2?.nome || 'Jogador 2';
-  const winner = partida.vencedor?.nome || (partida.vencedor_id === partida.jogador_1_id ? j1Name : j2Name);
+  const rawJ1Name = partida.jogador_1?.nome || 'Jogador 1';
+  const rawJ2Name = partida.jogador_2?.nome || 'Jogador 2';
+  const j1Name = formatPlayerName(rawJ1Name);
+  const j2Name = formatPlayerName(rawJ2Name);
+
+  const j1Photo = partida.jogador_1?.foto_url
+    ? formatAvatarUrlWithCacheBust(partida.jogador_1.foto_url)
+    : null;
+  const j2Photo = partida.jogador_2?.foto_url
+    ? formatAvatarUrlWithCacheBust(partida.jogador_2.foto_url)
+    : null;
+
+  const j1Initial = (j1Name.trim().charAt(0) || '1').toUpperCase();
+  const j2Initial = (j2Name.trim().charAt(0) || '2').toUpperCase();
+
+  const isUserJ1 = user.id === partida.jogador_1_id;
+  const isUserJ2 = user.id === partida.jogador_2_id;
+
+  const winner = partida.vencedor?.nome
+    ? formatPlayerName(partida.vencedor.nome)
+    : (partida.vencedor_id === partida.jogador_1_id ? j1Name : j2Name);
 
   const handleConfirm = async () => {
     setIsConfirming(true);
@@ -116,6 +148,67 @@ export const ConfirmarResultadoModal: React.FC<ConfirmarResultadoModalProps> = (
             </div>
           )}
 
+          {/* PLAYERS CARD COM FOTOS */}
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 p-4 sm:p-5 rounded-2xl bg-slate-50 border border-slate-200/80 text-center">
+            {/* JOGADOR 1 */}
+            <div className="flex flex-col items-center justify-between min-w-0 space-y-2">
+              <div className="flex flex-col items-center space-y-1.5 w-full">
+                <div className="relative w-[56px] h-[56px] sm:w-[64px] sm:h-[64px] shrink-0">
+                  {j1Photo && !j1ImgError ? (
+                    <img
+                      src={j1Photo}
+                      alt={j1Name}
+                      onError={() => setJ1ImgError(true)}
+                      className="w-full h-full rounded-full object-cover object-center border-[3px] border-[#0F172A] shadow-xs"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="w-full h-full rounded-full bg-[#0F172A] text-white border-[3px] border-[#0F172A] flex items-center justify-center font-black text-lg sm:text-xl shadow-xs">
+                      {j1Initial}
+                    </div>
+                  )}
+                </div>
+                <div className="w-full px-1">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">
+                    Jogador 1 {isUserJ1 && '(Você)'}
+                  </span>
+                  <h3 className="text-xs sm:text-sm font-black text-slate-900 line-clamp-2 break-words leading-tight mt-0.5 text-center">
+                    {j1Name}
+                  </h3>
+                </div>
+              </div>
+            </div>
+
+            {/* JOGADOR 2 */}
+            <div className="flex flex-col items-center justify-between min-w-0 space-y-2">
+              <div className="flex flex-col items-center space-y-1.5 w-full">
+                <div className="relative w-[56px] h-[56px] sm:w-[64px] sm:h-[64px] shrink-0">
+                  {j2Photo && !j2ImgError ? (
+                    <img
+                      src={j2Photo}
+                      alt={j2Name}
+                      onError={() => setJ2ImgError(true)}
+                      className="w-full h-full rounded-full object-cover object-center border-[3px] border-[#ccff00] shadow-xs"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="w-full h-full rounded-full bg-slate-900 text-[#ccff00] border-[3px] border-[#ccff00] flex items-center justify-center font-black text-lg sm:text-xl shadow-xs">
+                      {j2Initial}
+                    </div>
+                  )}
+                </div>
+                <div className="w-full px-1">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">
+                    Jogador 2 {isUserJ2 && '(Você)'}
+                  </span>
+                  <h3 className="text-xs sm:text-sm font-black text-slate-900 line-clamp-2 break-words leading-tight mt-0.5 text-center">
+                    {j2Name}
+                  </h3>
+                </div>
+              </div>
+            </div>
+          </div>
+
           {/* PLACAR DOS SETS EM DESTAQUE */}
           <div className="p-5 rounded-3xl bg-slate-900 text-white text-center space-y-3 shadow-lg">
             <span className="text-[10px] font-black uppercase tracking-widest text-[#ccff00]">
@@ -136,6 +229,20 @@ export const ConfirmarResultadoModal: React.FC<ConfirmarResultadoModalProps> = (
                 <p className="text-xl font-bold">{partida.detalhes_placar || 'Sem detalhes'}</p>
               )}
             </div>
+
+            {/* SE O USUÁRIO FOR JOGADOR 2, EXIBE TAMBÉM NA PERSPECTIVA DELE */}
+            {isUserJ2 && partida.sets && partida.sets.length > 0 && (
+              <p className="text-xs text-slate-400 font-bold">
+                Na sua perspectiva:{' '}
+                <span className="text-white font-black">
+                  {partida.sets
+                    .slice()
+                    .sort((a, b) => a.numero_set - b.numero_set)
+                    .map((s) => `${s.jogador_2_games}×${s.jogador_1_games}`)
+                    .join(' / ')}
+                </span>
+              </p>
+            )}
 
             <div className="pt-2 border-t border-slate-800/80 flex items-center justify-center gap-2 text-amber-300 text-xs font-black">
               <Trophy className="w-4 h-4" />
@@ -251,3 +358,4 @@ export const ConfirmarResultadoModal: React.FC<ConfirmarResultadoModalProps> = (
     </div>
   );
 };
+

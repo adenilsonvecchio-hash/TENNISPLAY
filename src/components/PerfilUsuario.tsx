@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AuthSession, PlayerClass, PerfilRole, MemberStatus, Reserva } from '../types';
 import { DbService } from '../lib/db';
 import { toast, formatClassUpdateToastMessage } from '../lib/toast';
 import { formatLocation } from '../lib/location';
+import { validateAvatarFile, formatAvatarUrlWithCacheBust } from '../lib/avatarImage';
 import {
   User,
   Mail,
@@ -16,7 +17,8 @@ import {
   ShieldCheck,
   Edit2,
   Camera,
-  AlertCircle
+  AlertCircle,
+  RefreshCw
 } from 'lucide-react';
 
 interface PerfilUsuarioProps {
@@ -38,12 +40,58 @@ export const PerfilUsuario: React.FC<PerfilUsuarioProps> = ({ session, onRefresh
   const [phoneInput, setPhoneInput] = useState(user?.whatsapp || '');
   const [fotoUrlInput, setFotoUrlInput] = useState(user?.foto_url || '');
   const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [avatarDisplayUrl, setAvatarDisplayUrl] = useState<string | null>(
+    user?.foto_url ? formatAvatarUrlWithCacheBust(user.foto_url) : null
+  );
+  const avatarInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setNomeInput(user?.nome || '');
     setPhoneInput(user?.whatsapp || '');
     setFotoUrlInput(user?.foto_url || '');
+    if (user?.foto_url) {
+      setAvatarDisplayUrl(formatAvatarUrlWithCacheBust(user.foto_url));
+    } else {
+      setAvatarDisplayUrl(null);
+    }
   }, [user]);
+
+  const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !user) return;
+
+    const validation = validateAvatarFile(file);
+    if (!validation.valid) {
+      toast.error(validation.error || 'Arquivo de imagem inválido.');
+      if (avatarInputRef.current) avatarInputRef.current.value = '';
+      return;
+    }
+
+    setUploadingAvatar(true);
+    try {
+      const { publicUrl } = await DbService.uploadUserAvatar(file, user.id);
+      await DbService.updateUserProfile(user.id, { foto_url: publicUrl });
+
+      const timestampedUrl = `${publicUrl}?v=${Date.now()}`;
+      setAvatarDisplayUrl(timestampedUrl);
+      if (user) {
+        user.foto_url = timestampedUrl;
+      }
+      setFotoUrlInput(publicUrl);
+
+      toast.success('Foto de perfil atualizada com sucesso!');
+      onRefreshSession();
+    } catch (err: any) {
+      console.error('Erro ao atualizar foto:', err);
+      toast.error(err.message || 'Erro ao enviar foto.');
+    } finally {
+      setUploadingAvatar(false);
+      if (avatarInputRef.current) {
+        avatarInputRef.current.value = '';
+      }
+    }
+  };
 
   // Password Modal State
   const [showPassModal, setShowPassModal] = useState(false);
@@ -162,17 +210,38 @@ export const PerfilUsuario: React.FC<PerfilUsuarioProps> = ({ session, onRefresh
           
           {/* Avatar / Photo */}
           <div className="relative group shrink-0">
-            {user.foto_url ? (
+            {(avatarDisplayUrl || user.foto_url) ? (
               <img
-                src={user.foto_url}
+                src={(avatarDisplayUrl || user.foto_url)!}
                 alt={user.nome}
                 className="w-24 h-24 sm:w-28 sm:h-28 rounded-3xl object-cover border-4 border-emerald-100 shadow-md"
+                referrerPolicy="no-referrer"
               />
             ) : (
               <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-3xl bg-slate-900 text-white font-black text-3xl flex items-center justify-center border-4 border-slate-100 shadow-md">
                 {user.nome.substring(0, 2).toUpperCase()}
               </div>
             )}
+
+            {/* Botão de câmera sobre o avatar */}
+            <label
+              title="Alterar foto de perfil"
+              className="absolute -bottom-1 -right-1 w-9 h-9 rounded-2xl bg-[#0F172A] hover:bg-slate-800 text-[#ccff00] flex items-center justify-center cursor-pointer shadow-lg transition-transform group-hover:scale-105"
+            >
+              {uploadingAvatar ? (
+                <RefreshCw className="w-4 h-4 animate-spin" />
+              ) : (
+                <Camera className="w-4 h-4" />
+              )}
+              <input
+                ref={avatarInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/jpg"
+                onChange={handleAvatarUpload}
+                disabled={uploadingAvatar}
+                className="hidden"
+              />
+            </label>
           </div>
 
           {/* User Basic Info */}

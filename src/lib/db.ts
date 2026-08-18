@@ -6,6 +6,9 @@ import {
 import { getSupabaseClient } from './supabase';
 import { normalizeLocation } from './location';
 import { getDayOfWeek, getTodayCivilDate, formatCivilDate, isPastCivilDate, isPastTimeSlot } from './dateUtils';
+import { PLAYER_AVATARS_BUCKET, validateAvatarFile, convertImageToWebp } from './avatarImage';
+
+export { PLAYER_AVATARS_BUCKET };
 
 const requireDb = () => {
   const db = getSupabaseClient();
@@ -345,6 +348,7 @@ async function mapMatch(row: any, currentUserId?: string, externalClassMap?: Map
     jogador_1_classe: j1Class,
     jogador_2_classe: j2Class,
     vencedor: row.vencedor ? mapUser(row.vencedor) : undefined,
+    grupo: row.grupo ? mapGroup(row.grupo) : undefined,
     reserva: parsedReserva,
     sets,
     curtidas_count: curtidasCount,
@@ -795,7 +799,10 @@ export const DbService = {
     if (values.whatsapp !== undefined) payload.whatsapp = values.whatsapp;
     if (values.foto_url !== undefined) payload.avatar_url = values.foto_url;
     const { data, error } = await requireDb().from('usuarios').update(payload).eq('id', userId).select().single();
-    if (error) fail('Erro ao atualizar perfil', error);
+    if (error) {
+      console.error('[Supabase updateUserProfile Error]:', error);
+      fail('Falha ao atualizar dados do usuário no banco de dados', error);
+    }
     return mapUser(data);
   },
 
@@ -1623,6 +1630,7 @@ export const DbService = {
       .from('partidas')
       .select(`
         *,
+        grupo:grupos(*),
         jogador_1:usuarios!partidas_jogador_1_id_fkey(*),
         jogador_2:usuarios!partidas_jogador_2_id_fkey(*),
         vencedor:usuarios!partidas_vencedor_id_fkey(*),
@@ -1654,6 +1662,7 @@ export const DbService = {
       .from('partidas')
       .select(`
         *,
+        grupo:grupos(*),
         jogador_1:usuarios!partidas_jogador_1_id_fkey(*),
         jogador_2:usuarios!partidas_jogador_2_id_fkey(*),
         vencedor:usuarios!partidas_vencedor_id_fkey(*),
@@ -1691,6 +1700,7 @@ export const DbService = {
       .from('partidas')
       .select(`
         *,
+        grupo:grupos(*),
         jogador_1:usuarios!partidas_jogador_1_id_fkey(*),
         jogador_2:usuarios!partidas_jogador_2_id_fkey(*),
         vencedor:usuarios!partidas_vencedor_id_fkey(*),
@@ -1721,97 +1731,34 @@ export const DbService = {
   }): Promise<{ status: PartidaStatus; vencedorId: string; placar: string }> {
     const db = requireDb();
 
-    // Tentar executar via RPC segura
-    try {
-      const { data: rpcData, error: rpcError } = await db.rpc('salvar_resultado_partida', {
+    // 1. Chamar RPC transacional primária `enviar_resultado_partida`
+    let rpcRes = await db.rpc('enviar_resultado_partida', {
+      p_partida_id: input.matchId,
+      p_sets: input.sets,
+      p_foto_url: input.fotoUrl || null,
+      p_foto_path: input.fotoPath || null
+    });
+
+    // 2. Fallback de assinatura se a função principal não estiver definida
+    if (rpcRes.error && rpcRes.error.message?.includes('function') && rpcRes.error.message?.includes('does not exist')) {
+      rpcRes = await db.rpc('salvar_resultado_partida', {
         p_partida_id: input.matchId,
         p_sets: input.sets,
         p_foto_url: input.fotoUrl || null,
         p_foto_path: input.fotoPath || null
       });
-
-      if (!rpcError && rpcData) {
-        return {
-          status: rpcData.status as PartidaStatus,
-          vencedorId: rpcData.vencedor_id,
-          placar: rpcData.placar
-        };
-      }
-      if (rpcError) {
-        console.warn('RPC salvar_resultado_partida falhou, tentando fallback direto:', rpcError.message);
-      }
-    } catch (err) {
-      console.warn('Erro ao chamar RPC salvar_resultado_partida, usando fallback:', err);
     }
 
-    // Fallback Direto Seguro no banco
-    const { data: match, error: fetchErr } = await db
-      .from('partidas')
-      .select('id, grupo_id, jogador_1_id, jogador_2_id, status')
-      .eq('id', input.matchId)
-      .single();
-
-    if (fetchErr || !match) fail('Partida não encontrada para registrar placar', fetchErr);
-
-    let setsJ1 = 0;
-    let setsJ2 = 0;
-    const placarParts: string[] = [];
-
-    // Limpar sets anteriores
-    await db.from('partida_sets').delete().eq('partida_id', input.matchId);
-
-    for (const s of input.sets) {
-      await db.from('partida_sets').insert({
-        partida_id: input.matchId,
-        numero_set: s.numero_set,
-        jogador_1_games: s.jogador_1_games,
-        jogador_2_games: s.jogador_2_games
-      });
-
-      if (s.jogador_1_games > s.jogador_2_games) setsJ1++;
-      else if (s.jogador_2_games > s.jogador_1_games) setsJ2++;
-
-      placarParts.push(`${s.jogador_1_games}x${s.jogador_2_games}`);
+    if (rpcRes.error) {
+      console.error('[submitMatchScore RPC Error]:', rpcRes.error);
+      fail(rpcRes.error.message || 'Erro ao enviar resultado da partida', rpcRes.error);
     }
 
-    const vencedorId = setsJ1 > setsJ2 ? match.jogador_1_id : match.jogador_2_id;
-    const placarStr = placarParts.join(' / ');
-    const newStatus: PartidaStatus = input.isAdminOrOwner ? 'FINALIZADA' : 'AGUARDANDO_CONFIRMACAO_RESULTADO';
-
-    const { error: updateErr } = await db
-      .from('partidas')
-      .update({
-        status: newStatus,
-        resultado_informado_por: input.userId,
-        vencedor_id: vencedorId,
-        detalhes_placar: placarStr,
-        foto_url: input.fotoUrl || null,
-        foto_path: input.fotoPath || null,
-        finalizado_em: input.isAdminOrOwner ? new Date().toISOString() : null
-      })
-      .eq('id', input.matchId);
-
-    if (updateErr) fail('Erro ao salvar resultado da partida', updateErr);
-
-    // Notificar adversário se não for admin
-    if (!input.isAdminOrOwner) {
-      const otherPlayerId = match.jogador_1_id === input.userId ? match.jogador_2_id : match.jogador_1_id;
-      const { data: reporter } = await db.from('usuarios').select('nome').eq('id', input.userId).single();
-      const authorName = reporter?.nome || 'Seu adversário';
-
-      await this.createNotification(
-        match.grupo_id,
-        otherPlayerId,
-        'Resultado Informado 🎾',
-        `${authorName} informou o placar (${placarStr}). Toque para conferir e confirmar.`,
-        'RESULTADO_INFORMADO'
-      );
-    }
-
+    const rpcData = rpcRes.data;
     return {
-      status: newStatus,
-      vencedorId,
-      placar: placarStr
+      status: (rpcData?.status || (input.isAdminOrOwner ? 'FINALIZADA' : 'AGUARDANDO_CONFIRMACAO_RESULTADO')) as PartidaStatus,
+      vencedorId: rpcData?.vencedor_id,
+      placar: rpcData?.placar
     };
   },
 
@@ -2176,26 +2123,71 @@ export const DbService = {
   },
 
   async uploadUserAvatar(file: File, userId: string): Promise<{ publicUrl: string; path: string }> {
-    const db = requireDb();
-    const fileExt = file.name.split('.').pop() || 'jpg';
-    const filePath = `${userId}/${Date.now()}.${fileExt}`;
+    if (!userId) {
+      throw new Error('Usuário não autenticado. Faça login novamente para atualizar a foto.');
+    }
 
+    // 1. Validação de formato e tamanho do arquivo (máx 5MB, JPG/PNG/WebP)
+    const validation = validateAvatarFile(file);
+    if (!validation.valid) {
+      throw new Error(validation.error || 'Arquivo de imagem inválido.');
+    }
+
+    const db = requireDb();
+
+    // 2. Converte a imagem para WebP otimizada
+    let convertedBlob: Blob;
+    try {
+      convertedBlob = await convertImageToWebp(file, { maxDimension: 800, quality: 0.90 });
+    } catch (convErr: any) {
+      console.warn('[uploadUserAvatar] Falha na conversão WebP, usando arquivo original:', convErr);
+      convertedBlob = file;
+    }
+
+    // 3. Caminho padronizado: ${user.id}/avatar.webp
+    const avatarPath = `${userId}/avatar.webp`;
+
+    // 4. Upload no bucket 'avatars' com upsert e contentType 'image/webp'
     const { error: uploadError } = await db.storage
-      .from('avatars')
-      .upload(filePath, file, {
+      .from(PLAYER_AVATARS_BUCKET)
+      .upload(avatarPath, convertedBlob, {
         cacheControl: '3600',
-        upsert: true
+        upsert: true,
+        contentType: 'image/webp'
       });
 
     if (uploadError) {
       console.error('[Supabase Storage avatars Upload Error]:', uploadError);
-      fail('Erro ao fazer upload do avatar', uploadError);
+      const errMsg = uploadError.message || String(uploadError);
+      const status = (uploadError as any).statusCode || (uploadError as any).status;
+
+      if (errMsg.includes('Bucket not found') || errMsg.includes('bucket not found') || status === 404 || status === '404') {
+        throw new Error("Bucket 'avatars' de armazenamento não encontrado no Supabase. Execute a migração 010_criar_bucket_avatars_e_politicas.sql ou crie o bucket 'avatars' público no painel do Supabase.");
+      }
+
+      if (errMsg.includes('JWT') || errMsg.includes('auth') || errMsg.includes('session') || errMsg.includes('not authenticated') || status === 401) {
+        throw new Error('Sessão expirada ou usuário não autenticado. Faça login novamente para atualizar a foto.');
+      }
+
+      if (errMsg.includes('row-level security') || errMsg.includes('RLS') || errMsg.includes('violates row-level security policy') || errMsg.includes('Access Denied') || status === 403) {
+        throw new Error('Permissão negada pelas políticas de segurança do Storage (RLS). Apenas o próprio usuário pode salvar na sua pasta.');
+      }
+
+      if (errMsg.includes('Payload too large') || errMsg.includes('Entity Too Large') || errMsg.includes('exceeded') || status === 413) {
+        throw new Error('A imagem excede o tamanho máximo permitido de 5 MB.');
+      }
+
+      throw new Error(`Erro ao fazer upload da foto de perfil: ${errMsg}`);
     }
 
-    const { data: urlData } = db.storage.from('avatars').getPublicUrl(filePath);
+    // 5. Obter URL pública
+    const { data: urlData } = db.storage
+      .from(PLAYER_AVATARS_BUCKET)
+      .getPublicUrl(avatarPath);
+
     return {
       publicUrl: urlData.publicUrl,
-      path: filePath
+      path: avatarPath
     };
   },
 

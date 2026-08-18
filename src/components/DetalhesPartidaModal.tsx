@@ -56,7 +56,7 @@ export const DetalhesPartidaModal: React.FC<DetalhesPartidaModalProps> = ({
 
   const canReportScore =
     (isParticipant || isAdminOrOwner) &&
-    ['CONFIRMADA', 'REALIZADA', 'AGUARDANDO_RESULTADO'].includes(partida.status);
+    ['CONFIRMADA', 'ACEITA', 'REALIZADA', 'AGUARDANDO_RESULTADO'].includes(partida.status);
 
   const canConfirmScore =
     (partida.status === 'AGUARDANDO_CONFIRMACAO_RESULTADO') &&
@@ -79,6 +79,7 @@ export const DetalhesPartidaModal: React.FC<DetalhesPartidaModalProps> = ({
 
   const getStatusBadge = (status: string) => {
     switch (status) {
+      case 'ACEITA':
       case 'CONFIRMADA':
         return (
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-blue-100 text-blue-800 border border-blue-200">

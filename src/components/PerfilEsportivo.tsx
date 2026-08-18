@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AuthSession, EstatisticasJogador, Partida, FeedItem, PlayerClass, RankingJogador } from '../types';
 import { DbService } from '../lib/db';
 import { toast } from '../lib/toast';
 import { formatLocation } from '../lib/location';
+import { validateAvatarFile, formatAvatarUrlWithCacheBust } from '../lib/avatarImage';
+import { formatBrDate, formatCivilDate } from '../lib/dateUtils';
 import {
   Trophy,
   Camera,
@@ -45,7 +47,7 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
 
   // Navigation tab
   const [activeTab, setActiveTab] = useState<'ESTATISTICAS' | 'PARTIDAS' | 'FEED'>('ESTATISTICAS');
-  const [matchSubFilter, setMatchSubFilter] = useState<'TODAS' | 'PROXIMAS' | 'FINALIZADAS' | 'CANCELADAS'>('TODAS');
+  const [matchTab, setMatchTab] = useState<'PROXIMAS' | 'HISTORICO'>('PROXIMAS');
 
   // Stats & Matches & Feed
   const [stats, setStats] = useState<EstatisticasJogador | null>(null);
@@ -56,6 +58,10 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [avatarDisplayUrl, setAvatarDisplayUrl] = useState<string | null>(
+    user?.foto_url ? formatAvatarUrlWithCacheBust(user.foto_url) : null
+  );
+  const avatarInputRef = useRef<HTMLInputElement>(null);
 
   // Modals
   const [selectedMatchForDetails, setSelectedMatchForDetails] = useState<Partida | null>(null);
@@ -106,6 +112,11 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
   useEffect(() => {
     setEditNome(user?.nome || '');
     setEditPhone(user?.whatsapp || '');
+    if (user?.foto_url) {
+      setAvatarDisplayUrl(formatAvatarUrlWithCacheBust(user.foto_url));
+    } else {
+      setAvatarDisplayUrl(null);
+    }
   }, [user]);
 
   const handleRefresh = () => {
@@ -118,23 +129,39 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
     const file = e.target.files?.[0];
     if (!file || !user) return;
 
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error('A imagem deve ter no máximo 5MB.');
+    // 1. Validação prévia de formato e tamanho (máx 5MB)
+    const validation = validateAvatarFile(file);
+    if (!validation.valid) {
+      toast.error(validation.error || 'Arquivo de imagem inválido.');
+      if (avatarInputRef.current) avatarInputRef.current.value = '';
       return;
     }
 
     setUploadingAvatar(true);
     try {
+      // 2. Upload para o bucket 'avatars' no caminho ${user.id}/avatar.webp
       const { publicUrl } = await DbService.uploadUserAvatar(file, user.id);
+
+      // 3. Atualizar no banco a coluna avatar_url na tabela usuarios
       await DbService.updateUserProfile(user.id, { foto_url: publicUrl });
-      toast.success('Foto de perfil atualizada!');
+
+      // 4. Atualizar imediatamente o estado React com cache-busting
+      const timestampedUrl = `${publicUrl}?v=${Date.now()}`;
+      setAvatarDisplayUrl(timestampedUrl);
+      if (user) {
+        user.foto_url = timestampedUrl;
+      }
+
+      toast.success('Foto de perfil atualizada com sucesso!');
       onRefreshSession();
-      loadData();
     } catch (err: any) {
-      console.error('Erro ao atualizar foto:', err);
-      toast.error(err.message || 'Erro ao enviar foto.');
+      console.error('Erro ao atualizar foto de perfil:', err);
+      toast.error(err.message || 'Erro ao enviar foto de perfil.');
     } finally {
       setUploadingAvatar(false);
+      if (avatarInputRef.current) {
+        avatarInputRef.current.value = '';
+      }
     }
   };
 
@@ -229,19 +256,83 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
     (m) => m.jogador_2_id === user.id && m.status === 'AGUARDANDO_ACEITE'
   );
 
-  // Filtragem de partidas
-  const filteredMatches = matches.filter((m) => {
-    if (matchSubFilter === 'PROXIMAS') {
-      return ['AGUARDANDO_ACEITE', 'CONFIRMADA', 'AGUARDANDO_RESULTADO', 'AGUARDANDO_CONFIRMACAO_RESULTADO'].includes(m.status);
+  // Helper para ordenação cronológica das partidas
+  const getMatchSortDateTime = (m: Partida): string => {
+    const dateStr = m.reserva?.data || (m.criado_em ? formatCivilDate(m.criado_em) : '9999-12-31');
+    const timeStr = m.reserva?.horario_label ? m.reserva.horario_label.slice(0, 5) : '00:00';
+    return `${dateStr} ${timeStr}`;
+  };
+
+  // 1. ABA PRÓXIMAS PARTIDAS (Status ACEITA / CONFIRMADA / AGUARDANDO_RESULTADO / AGUARDANDO_CONFIRMACAO_RESULTADO / REALIZADA)
+  // Ordenadas da partida mais próxima para a mais distante (cronológica crescente)
+  const proximasPartidas = matches
+    .filter((m) => ['ACEITA', 'CONFIRMADA', 'REALIZADA', 'AGUARDANDO_RESULTADO', 'AGUARDANDO_CONFIRMACAO_RESULTADO'].includes(m.status))
+    .sort((a, b) => getMatchSortDateTime(a).localeCompare(getMatchSortDateTime(b)));
+
+  // 2. ABA HISTÓRICO (Status CONCLUIDA / FINALIZADA)
+  // Ordenadas da partida mais recente para a mais antiga (cronológica decrescente)
+  const historicoPartidas = matches
+    .filter((m) => ['CONCLUIDA', 'FINALIZADA'].includes(m.status))
+    .sort((a, b) => {
+      const dateA = a.finalizado_em || a.reserva?.data || a.criado_em || '';
+      const dateB = b.finalizado_em || b.reserva?.data || b.criado_em || '';
+      return new Date(dateB).getTime() - new Date(dateA).getTime();
+    });
+
+  // Função para formatar os sets na perspectiva do usuário logado (inversão se for jogador_2)
+  const getFormattedSetsForUser = (m: Partida) => {
+    const isJ1 = m.jogador_1_id === user.id;
+
+    if (m.sets && m.sets.length > 0) {
+      return m.sets
+        .slice()
+        .sort((a, b) => a.numero_set - b.numero_set)
+        .map((s) => {
+          const myGames = isJ1 ? s.jogador_1_games : s.jogador_2_games;
+          const oppGames = isJ1 ? s.jogador_2_games : s.jogador_1_games;
+          return {
+            numero: s.numero_set,
+            myGames,
+            oppGames,
+            label: `${myGames} × ${oppGames}`
+          };
+        });
     }
-    if (matchSubFilter === 'FINALIZADAS') {
-      return m.status === 'FINALIZADA';
+
+    if (m.detalhes_placar) {
+      const raw = m.detalhes_placar.trim();
+      if (raw.toUpperCase().includes('W.O.') || raw.toUpperCase().includes('WO')) {
+        return [{ numero: 1, myGames: 0, oppGames: 0, label: 'W.O.' }];
+      }
+
+      const chunks = raw.split(/[,;\n]+/).map((c) => c.trim()).filter(Boolean);
+      if (chunks.length > 0) {
+        return chunks.map((chunk, idx) => {
+          const match = chunk.match(/(\d+)\s*[/xX×\-–—]\s*(\d+)/);
+          if (match) {
+            const g1 = parseInt(match[1], 10);
+            const g2 = parseInt(match[2], 10);
+            const myGames = isJ1 ? g1 : g2;
+            const oppGames = isJ1 ? g2 : g1;
+            return {
+              numero: idx + 1,
+              myGames,
+              oppGames,
+              label: `${myGames} × ${oppGames}`
+            };
+          }
+          return {
+            numero: idx + 1,
+            myGames: 0,
+            oppGames: 0,
+            label: chunk
+          };
+        });
+      }
     }
-    if (matchSubFilter === 'CANCELADAS') {
-      return m.status === 'CANCELADA' || m.status === 'RECUSADA';
-    }
-    return true;
-  });
+
+    return [];
+  };
 
   const formattedLocation = formatLocation(activeGroup.cidade, activeGroup.estado);
 
@@ -260,9 +351,9 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
             {/* AVATAR COM BOTÃO DE UPLOAD */}
             <div className="relative group">
               <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-3xl bg-slate-900 text-white flex items-center justify-center font-black text-3xl overflow-hidden border-4 border-slate-100 shadow-md">
-                {user.foto_url ? (
+                {(avatarDisplayUrl || user.foto_url) ? (
                   <img
-                    src={user.foto_url}
+                    src={(avatarDisplayUrl || user.foto_url)!}
                     alt={user.nome}
                     className="w-full h-full object-cover"
                     referrerPolicy="no-referrer"
@@ -283,8 +374,9 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
                   <Camera className="w-4 h-4" />
                 )}
                 <input
+                  ref={avatarInputRef}
                   type="file"
-                  accept="image/*"
+                  accept="image/jpeg,image/png,image/webp,image/jpg"
                   onChange={handleAvatarUpload}
                   disabled={uploadingAvatar}
                   className="hidden"
@@ -697,7 +789,7 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
 
       {/* ---------------- ABA 2: MINHAS PARTIDAS ---------------- */}
       {activeTab === 'PARTIDAS' && (
-        <div className="space-y-4 animate-in fade-in">
+        <div className="space-y-5 animate-in fade-in">
           
           {/* DESAFIOS RECEBIDOS PENDENTES DE ACEITE */}
           {pendingChallenges.length > 0 && (
@@ -709,165 +801,163 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
             />
           )}
 
-          {/* SUB-FILTROS */}
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
-            {(['TODAS', 'PROXIMAS', 'FINALIZADAS', 'CANCELADAS'] as const).map((filter) => (
-              <button
-                key={filter}
-                type="button"
-                onClick={() => setMatchSubFilter(filter)}
-                className={`px-3.5 py-1.5 rounded-xl text-xs font-black shrink-0 transition-all cursor-pointer ${
-                  matchSubFilter === filter
-                    ? 'bg-slate-900 text-white shadow-2xs'
-                    : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-                }`}
-              >
-                {filter === 'TODAS' && 'Todas as Partidas'}
-                {filter === 'PROXIMAS' && 'Próximas'}
-                {filter === 'FINALIZADAS' && 'Finalizadas'}
-                {filter === 'CANCELADAS' && 'Canceladas'}
-              </button>
-            ))}
+          {/* NAVEGAÇÃO ENTRE ABAS: PRÓXIMAS PARTIDAS / HISTÓRICO */}
+          <div className="flex items-center gap-2 p-1 bg-slate-100/90 rounded-2xl w-fit border border-slate-200/80">
+            <button
+              type="button"
+              onClick={() => setMatchTab('PROXIMAS')}
+              className={`px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-2 ${
+                matchTab === 'PROXIMAS'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Calendar className="w-3.5 h-3.5" />
+              <span>PRÓXIMAS PARTIDAS</span>
+              {proximasPartidas.length > 0 && (
+                <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black ${
+                  matchTab === 'PROXIMAS' ? 'bg-slate-900 text-white' : 'bg-slate-200 text-slate-700'
+                }`}>
+                  {proximasPartidas.length}
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setMatchTab('HISTORICO')}
+              className={`px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-2 ${
+                matchTab === 'HISTORICO'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Trophy className="w-3.5 h-3.5" />
+              <span>HISTÓRICO</span>
+              {historicoPartidas.length > 0 && (
+                <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black ${
+                  matchTab === 'HISTORICO' ? 'bg-slate-900 text-white' : 'bg-slate-200 text-slate-700'
+                }`}>
+                  {historicoPartidas.length}
+                </span>
+              )}
+            </button>
           </div>
 
-          {filteredMatches.length === 0 ? (
-            <div className="bg-white rounded-3xl p-12 text-center border border-slate-200 text-slate-400 space-y-3">
-              <Trophy className="w-8 h-8 mx-auto opacity-50" />
-              <p className="text-xs font-bold">Nenhuma partida encontrada neste filtro.</p>
-              <button
-                type="button"
-                onClick={() => setShowJogarModal(true)}
-                className="px-4 py-2 rounded-xl bg-[#0F172A] text-[#ccff00] text-xs font-black cursor-pointer"
-              >
-                Marcar um Jogo Agora
-              </button>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {filteredMatches.map((m) => {
-                const isJ1 = m.jogador_1_id === user.id;
-                const oppName = isJ1 ? m.jogador_2?.nome || 'Adversário' : m.jogador_1?.nome || 'Adversário';
-                const oppPhoto = isJ1 ? m.jogador_2?.foto_url : m.jogador_1?.foto_url;
-                const oppClass = isJ1 ? m.jogador_2_classe : m.jogador_1_classe;
-
-                const isWinner = m.vencedor_id === user.id;
-                const isFinished = m.status === 'FINALIZADA';
-                const isAguardandoAceite = m.status === 'AGUARDANDO_ACEITE';
-                const isRecusada = m.status === 'RECUSADA';
-
-                const canReport = ['CONFIRMADA', 'AGUARDANDO_RESULTADO', 'REALIZADA'].includes(m.status);
-                const canConfirm = m.status === 'AGUARDANDO_CONFIRMACAO_RESULTADO' && m.resultado_informado_por !== user.id;
-                const isChallengeForMe = isAguardandoAceite && !isJ1;
-
-                return (
-                  <div
-                    key={m.id}
-                    className={`bg-white rounded-3xl p-4 sm:p-5 border shadow-2xs hover:shadow-md transition-all flex flex-col justify-between space-y-3 ${
-                      isChallengeForMe ? 'border-amber-300 bg-amber-50/20' : 'border-slate-200'
-                    }`}
+          {/* ======================================================== */}
+          {/* CONTEÚDO DA ABA 1: PRÓXIMAS PARTIDAS */}
+          {/* ======================================================== */}
+          {matchTab === 'PROXIMAS' && (
+            <div>
+              {proximasPartidas.length === 0 ? (
+                <div className="bg-white rounded-3xl p-10 sm:p-12 text-center border border-slate-200 text-slate-400 space-y-3">
+                  <div className="w-14 h-14 mx-auto rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400">
+                    <Calendar className="w-7 h-7" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-700">Você ainda não possui partidas confirmadas.</p>
+                    <p className="text-xs text-slate-400 mt-1">Marque um jogo com um adversário para disputar.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowJogarModal(true)}
+                    className="px-5 py-2.5 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-[#ccff00] text-xs font-black transition-all cursor-pointer shadow-md inline-flex items-center gap-1.5 mt-2"
                   >
-                    <div>
-                      {/* HEADER DA PARTIDA */}
-                      <div className="flex items-center justify-between gap-2 mb-3">
-                        <div className="flex items-center gap-1.5 text-[11px] font-extrabold text-slate-500">
-                          <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                          <span>{m.reserva?.data || new Date(m.criado_em).toLocaleDateString('pt-BR')}</span>
-                          {m.reserva?.horario_label && <span>· {m.reserva.horario_label}</span>}
+                    <Swords className="w-4 h-4" />
+                    <span>🎾 Marcar um Jogo</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {proximasPartidas.map((m) => {
+                    const isJ1 = m.jogador_1_id === user.id;
+                    const opp = isJ1 ? m.jogador_2 : m.jogador_1;
+                    const oppName = opp?.nome || 'Adversário';
+                    const oppPhoto = opp?.foto_url;
+                    const oppClass = isJ1 ? m.jogador_2_classe : m.jogador_1_classe;
+                    const dateFormatted = m.reserva?.data ? formatBrDate(m.reserva.data) : (m.criado_em ? formatBrDate(formatCivilDate(m.criado_em)) : '');
+                    const timeFormatted = m.reserva?.horario_label || (m.reserva?.horario?.hora_inicio ? m.reserva.horario.hora_inicio.slice(0, 5) : '');
+                    const dateTimeDisplay = timeFormatted ? `${dateFormatted} às ${timeFormatted}` : dateFormatted;
+                    const courtDisplay = m.reserva?.quadra?.nome || (m.reserva?.quadra_numero ? `Quadra ${m.reserva.quadra_numero}` : 'Quadra Principal');
+                    const groupDisplay = m.grupo?.nome || activeGroup.nome;
+
+                    const canReport = ['CONFIRMADA', 'ACEITA', 'AGUARDANDO_RESULTADO', 'REALIZADA'].includes(m.status);
+                    const canConfirm = m.status === 'AGUARDANDO_CONFIRMACAO_RESULTADO' && m.resultado_informado_por !== user.id;
+
+                    return (
+                      <div
+                        key={m.id}
+                        className="bg-white rounded-3xl p-5 border border-slate-200 shadow-2xs hover:shadow-md transition-all flex flex-col justify-between space-y-4"
+                      >
+                        <div className="space-y-3.5">
+                          {/* CABEÇALHO DO CARTÃO: PRÓXIMA PARTIDA E STATUS */}
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-slate-100 text-slate-800 border border-slate-200">
+                              <Calendar className="w-3 h-3 text-slate-500" />
+                              <span>PRÓXIMA PARTIDA</span>
+                            </span>
+
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-blue-50 text-blue-800 border border-blue-200">
+                              <CheckCircle2 className="w-3 h-3 text-blue-600" />
+                              <span>Partida confirmada</span>
+                            </span>
+                          </div>
+
+                          {/* IDENTIFICAÇÃO DO ADVERSÁRIO */}
+                          <div className="flex items-center gap-3.5 p-3 rounded-2xl bg-slate-50/80 border border-slate-100">
+                            <div className="w-12 h-12 rounded-2xl bg-slate-900 text-white flex items-center justify-center font-black text-sm shrink-0 overflow-hidden shadow-xs">
+                              {oppPhoto ? (
+                                <img src={oppPhoto} alt={oppName} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                              ) : (
+                                <span>{oppName.charAt(0).toUpperCase()}</span>
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">
+                                Adversário
+                              </span>
+                              <h4 className="text-sm font-black text-slate-900 truncate">{oppName}</h4>
+                              {oppClass && (
+                                <span className="inline-block mt-0.5 text-[10px] font-black px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                  {oppClass}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* DETALHES DA PARTIDA */}
+                          <div className="space-y-1.5 text-xs">
+                            <div className="flex items-center gap-2 text-slate-700 font-bold">
+                              <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                              <span>{dateTimeDisplay}</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-slate-700 font-bold">
+                              <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                              <span>{courtDisplay}</span>
+                            </div>
+                            <div className="text-[11px] font-extrabold text-slate-400 pl-5.5">
+                              {groupDisplay}
+                            </div>
+                          </div>
                         </div>
 
-                        {isFinished ? (
-                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black ${
-                            isWinner ? 'bg-emerald-100 text-emerald-900' : 'bg-rose-100 text-rose-900'
-                          }`}>
-                            {isWinner ? 'Vitória' : 'Derrota'}
-                          </span>
-                        ) : isAguardandoAceite ? (
-                          isJ1 ? (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-200">
-                              Aguardando Aceite
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-400 text-slate-950 animate-pulse">
-                              Desafio Recebido
-                            </span>
-                          )
-                        ) : isRecusada ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-100 text-rose-900">
-                            Desafio Recusado
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-100 text-blue-900">
-                            {m.status === 'AGUARDANDO_CONFIRMACAO_RESULTADO' ? 'Aguardando Confirmação' : m.status === 'CANCELADA' ? 'Cancelada' : 'Confirmada'}
-                          </span>
-                        )}
-                      </div>
-
-                      {/* CONFRONTO VS */}
-                      <div className="flex items-center justify-between gap-3 p-3 rounded-2xl bg-slate-50 border border-slate-100">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <div className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center font-black text-xs shrink-0 overflow-hidden">
-                            {oppPhoto ? (
-                              <img src={oppPhoto} alt={oppName} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                            ) : (
-                              <span>{oppName.charAt(0).toUpperCase()}</span>
-                            )}
-                          </div>
-                          <div className="min-w-0">
-                            <span className="text-[10px] font-bold text-slate-400 block">Adversário</span>
-                            <h4 className="text-xs font-black text-slate-900 truncate">{oppName}</h4>
-                            {oppClass && <span className="text-[9px] font-extrabold text-slate-500">{oppClass}</span>}
-                          </div>
-                        </div>
-
-                        {/* PLACAR */}
-                        {m.detalhes_placar ? (
-                          <div className="text-right">
-                            <span className="text-[10px] font-bold text-slate-400 block">Placar</span>
-                            <span className="text-xs font-black text-slate-900">{m.detalhes_placar}</span>
-                          </div>
-                        ) : (
-                          <span className="text-[11px] font-bold text-slate-400">Quadra {m.reserva?.quadra_numero || 1}</span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* BOTÕES DE AÇÃO */}
-                    <div className="flex items-center gap-2 pt-1">
-                      {isChallengeForMe ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => handleAcceptChallenge(m.id)}
-                            className="flex-1 py-2 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-[#ccff00] text-xs font-black transition-colors flex items-center justify-center gap-1 cursor-pointer"
-                          >
-                            <CheckCircle2 className="w-3.5 h-3.5 text-[#ccff00]" />
-                            <span>Aceitar</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleRejectChallenge(m.id)}
-                            className="py-2 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold transition-colors cursor-pointer"
-                          >
-                            Recusar
-                          </button>
-                        </>
-                      ) : (
-                        <>
+                        {/* BOTÕES DE AÇÃO */}
+                        <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
                           {canConfirm && (
                             <button
                               type="button"
                               onClick={() => setSelectedMatchForConfirm(m)}
-                              className="flex-1 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-black transition-colors cursor-pointer"
+                              className="flex-1 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-black transition-colors cursor-pointer"
                             >
                               Conferir Placar
                             </button>
                           )}
 
-                          {canReport && (
+                          {canReport && !canConfirm && (
                             <button
                               type="button"
                               onClick={() => setSelectedMatchForScore(m)}
-                              className="flex-1 py-2 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-[#ccff00] text-xs font-black transition-colors cursor-pointer"
+                              className="flex-1 py-2.5 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-[#ccff00] text-xs font-black transition-colors cursor-pointer"
                             >
                               Informar Resultado
                             </button>
@@ -876,16 +966,160 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
                           <button
                             type="button"
                             onClick={() => setSelectedMatchForDetails(m)}
-                            className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-black transition-colors cursor-pointer"
+                            className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-black transition-colors cursor-pointer"
                           >
-                            Ver Detalhes
+                            Ver detalhes
                           </button>
-                        </>
-                      )}
-                    </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ======================================================== */}
+          {/* CONTEÚDO DA ABA 2: HISTÓRICO */}
+          {/* ======================================================== */}
+          {matchTab === 'HISTORICO' && (
+            <div>
+              {historicoPartidas.length === 0 ? (
+                <div className="bg-white rounded-3xl p-10 sm:p-12 text-center border border-slate-200 text-slate-400 space-y-3">
+                  <div className="w-14 h-14 mx-auto rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400">
+                    <Trophy className="w-7 h-7" />
                   </div>
-                );
-              })}
+                  <div>
+                    <p className="text-sm font-bold text-slate-700">Você ainda não possui partidas concluídas.</p>
+                    <p className="text-xs text-slate-400 mt-1">Assim que disputar e confirmar o resultado de uma partida, ela ficará registrada aqui no seu histórico esportivo.</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {historicoPartidas.map((m) => {
+                    const isJ1 = m.jogador_1_id === user.id;
+                    const me = isJ1 ? m.jogador_1 : m.jogador_2;
+                    const myName = me?.nome || user.nome;
+                    const opp = isJ1 ? m.jogador_2 : m.jogador_1;
+                    const oppName = opp?.nome || 'Adversário';
+                    const oppPhoto = opp?.foto_url;
+                    const oppClass = isJ1 ? m.jogador_2_classe : m.jogador_1_classe;
+
+                    const isWinner = m.vencedor_id === user.id;
+                    const isLoser = !!m.vencedor_id && m.vencedor_id !== user.id;
+                    const isWO = m.detalhes_placar?.toUpperCase().includes('W.O.') || m.detalhes_placar?.toUpperCase().includes('WO');
+
+                    const dateFormatted = m.reserva?.data ? formatBrDate(m.reserva.data) : (m.finalizado_em ? formatBrDate(formatCivilDate(m.finalizado_em)) : (m.criado_em ? formatBrDate(formatCivilDate(m.criado_em)) : ''));
+                    const courtDisplay = m.reserva?.quadra?.nome || (m.reserva?.quadra_numero ? `Quadra ${m.reserva.quadra_numero}` : 'Quadra');
+                    const groupDisplay = m.grupo?.nome || activeGroup.nome;
+
+                    const formattedSets = getFormattedSetsForUser(m);
+
+                    return (
+                      <div
+                        key={m.id}
+                        className="bg-white rounded-3xl p-5 border border-slate-200 shadow-2xs hover:shadow-md transition-all flex flex-col justify-between space-y-4"
+                      >
+                        <div className="space-y-3.5">
+                          {/* SELO DE RESULTADO (VITÓRIA / DERROTA / WO) */}
+                          <div className="flex items-center justify-between gap-2">
+                            {isWO ? (
+                              <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-amber-100 text-amber-900 border border-amber-300">
+                                <span>W.O.</span>
+                              </span>
+                            ) : isWinner ? (
+                              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-emerald-500 text-white shadow-xs">
+                                <Trophy className="w-3.5 h-3.5" />
+                                <span>VITÓRIA</span>
+                              </span>
+                            ) : isLoser ? (
+                              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-rose-500 text-white shadow-xs">
+                                <span>DERROTA</span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-slate-200 text-slate-800">
+                                <span>CONCLUÍDA</span>
+                              </span>
+                            )}
+
+                            <div className="flex items-center gap-1.5 text-xs font-extrabold text-slate-500">
+                              <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                              <span>{dateFormatted}</span>
+                            </div>
+                          </div>
+
+                          {/* CONFRONTO: MEU NOME × ADVERSÁRIO */}
+                          <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-100 space-y-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <h4 className="text-sm font-black text-slate-900 truncate">
+                                  {myName} <span className="text-slate-400 font-bold">×</span> {oppName}
+                                </h4>
+                                {oppClass && (
+                                  <span className="text-[10px] font-bold text-slate-500 block mt-0.5">
+                                    Adversário: {oppClass}
+                                  </span>
+                                )}
+                              </div>
+
+                              <div className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center font-black text-xs shrink-0 overflow-hidden shadow-xs">
+                                {oppPhoto ? (
+                                  <img src={oppPhoto} alt={oppName} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                                ) : (
+                                  <span>{oppName.charAt(0).toUpperCase()}</span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* PLACAR COMPLETO APRESENTADO NA PERSPECTIVA DO USUÁRIO */}
+                            <div className="pt-2 border-t border-slate-200/70">
+                              <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block mb-1.5">
+                                Placar da Partida
+                              </span>
+                              {formattedSets.length > 0 ? (
+                                <div className="flex flex-wrap items-center gap-2">
+                                  {formattedSets.map((s, idx) => (
+                                    <div
+                                      key={idx}
+                                      className="px-3 py-1 rounded-xl bg-white border border-slate-200 text-xs font-black text-slate-900 shadow-2xs"
+                                    >
+                                      {s.label}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="text-xs font-black text-slate-800">
+                                  {m.detalhes_placar || 'Sem detalhes de placar'}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* INFORMAÇÕES DE QUADRA E CLUBE */}
+                          <div className="flex items-center justify-between text-xs text-slate-600 font-bold px-1">
+                            <div className="flex items-center gap-1.5">
+                              <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                              <span>{courtDisplay}</span>
+                            </div>
+                            <span className="text-[11px] font-bold text-slate-400">{groupDisplay}</span>
+                          </div>
+                        </div>
+
+                        {/* BOTÃO VER DETALHES */}
+                        <div className="pt-2 border-t border-slate-100 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedMatchForDetails(m)}
+                            className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-black transition-colors cursor-pointer text-center"
+                          >
+                            Ver detalhes
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 

@@ -98,6 +98,7 @@ export interface Reserva {
   horario_label: string;
   quadra_id?: string;
   quadra_numero: number;
+  quadra?: Quadra;
   jogador_id: string;
   jogador_nome: string;
   jogador_classe?: PlayerClass;
@@ -129,6 +130,7 @@ export type NotificacaoType =
   | 'DESAFIO_ACEITO'
   | 'DESAFIO_RECUSADO'
   | 'RESULTADO_INFORMADO'
+  | 'RESULTADO_RECEBIDO'
   | 'RESULTADO_CONFIRMADO'
   | 'CORRECAO_SOLICITADA';
 
@@ -184,6 +186,7 @@ export interface Partida {
   jogador_1_classe?: PlayerClass;
   jogador_2_classe?: PlayerClass;
   vencedor?: Usuario;
+  grupo?: Grupo;
   reserva?: Reserva;
   sets?: PartidaSet[];
   curtidas_count?: number;

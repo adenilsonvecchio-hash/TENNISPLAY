@@ -61,7 +61,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F6F8FC] text-slate-900 font-sans selection:bg-[#C6FF00] selection:text-[#0B1633]">
+    <div className={session ? "min-h-screen bg-[#F6F8FC] text-slate-900 font-sans selection:bg-[#C6FF00] selection:text-[#0B1633]" : "h-[100svh] max-h-[100svh] overflow-hidden bg-[#faf9f6] text-slate-900 font-sans selection:bg-[#ccff00] selection:text-slate-950"}>
       
       {/* 1. UNAUTHENTICATED: Home Landing Page */}
       {!session ? (
