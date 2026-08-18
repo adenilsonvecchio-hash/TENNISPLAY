@@ -22,6 +22,46 @@
   font-weight: 900;
 }
 
+/* Estrutura do Carrossel Hero */
+.hero {
+  position: relative;
+  overflow: hidden;
+}
+
+.hero-slide {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 900ms ease;
+  pointer-events: none;
+}
+
+.hero-slide.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.hero-slide-man {
+  object-position: 58% center;
+}
+@media (min-width: 768px) {
+  .hero-slide-man {
+    object-position: center center;
+  }
+}
+
+.hero-slide-woman {
+  object-position: 62% center;
+}
+@media (min-width: 768px) {
+  .hero-slide-woman {
+    object-position: center center;
+  }
+}
+
 /* Transição suave de temas do painel */
 .theme-smooth-transition {
   transition:
@@ -61,10 +101,10 @@
 }
 
 @media (max-height: 600px) {
-  .landing-photo-panel {
+  .hero {
     height: 32% !important;
   }
-  .landing-options-panel {
+  .right-column {
     height: 68% !important;
   }
   .landing-cards-container {
