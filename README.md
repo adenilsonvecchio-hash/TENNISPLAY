@@ -1,35 +1,20 @@
-# Agenda do Tênis — Supabase central
+<div align="center">
+<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
+</div>
 
-Aplicativo React + TypeScript + Vite conectado exclusivamente ao Supabase.
+# Run and deploy your AI Studio app
 
-## Configuração
+This contains everything you need to run your app locally.
 
-1. Instale as dependências com `npm install`.
-2. Configure no ambiente de execução:
+View your app in AI Studio: https://ai.studio/apps/bf12cefe-72c1-47b6-8841-afdabe37f172
 
-```env
-VITE_SUPABASE_URL=https://slugmpepkblrknxpncvw.supabase.co
-VITE_SUPABASE_PUBLISHABLE_KEY=sua_publishable_key
-```
+## Run Locally
 
-3. O projeto Supabase precisa possuir o esquema oficial com as tabelas:
-   `usuarios`, `grupos`, `membros_grupo`, `quadras`, `horarios`, `reservas`,
-   `notificacoes` e `audit_logs`.
-4. Execute `npm run dev` para desenvolvimento ou `npm run build` para produção.
+**Prerequisites:**  Node.js
 
-## Arquitetura
 
-- Supabase Auth controla cadastro, login, sessão e troca de senha.
-- PostgreSQL com RLS é a única fonte dos dados de negócio.
-- Realtime atualiza reservas, membros e notificações.
-- Não existe Express, `db.json`, banco local ou fallback com dados fictícios.
-- A configuração do Supabase não é gravada manualmente no navegador.
-
-## Verificação
-
-```bash
-npm run lint
-npm run build
-```
-
-Antes de liberar usuários, faça um teste real com duas contas e dois aparelhos.
+1. Install dependencies:
+   `npm install`
+2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+3. Run the app:
+   `npm run dev`
