@@ -6,8 +6,8 @@
 
 import { AuthSession, CourtConfig, Grupo, MembroGrupo, Notificacao, Partida, RankingJogador, Reserva, Usuario } from '../types';
 
-const SESSION_CACHE_KEY = 'tp_session_cache_v1';
-const CACHE_PREFIX = 'tp_cache_v1';
+const SESSION_CACHE_KEY = 'tp_session_cache_v2';
+const CACHE_PREFIX = 'tp_cache_v2';
 
 export interface CachedEnvelope<T> {
   data: T;

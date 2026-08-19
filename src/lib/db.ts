@@ -1,11 +1,12 @@
 import {
   AuthSession, CadastroJogadorData, CadastroProprietarioData, CourtConfig, DEFAULT_HORARIOS_PADRAO,
   Grupo, MemberStatus, MembroGrupo, Notificacao, PerfilRole, PlayerClass, DEFAULT_PLAYER_CLASSES, Quadra, Reserva, TimeSlot, Usuario,
-  Partida, PartidaSet, PartidaStatus, EstatisticasJogador, RankingJogador, FeedItem, DesempenhoMes, EstatisticasPorClasse
+  Partida, PartidaSet, PartidaStatus, EstatisticasJogador, RankingJogador, FeedItem, DesempenhoMes, EstatisticasPorClasse,
+  ConfrontoDireto, ConfrontoPartidaResumo
 } from '../types';
 import { getSupabaseClient } from './supabase';
 import { normalizeLocation } from './location';
-import { getDayOfWeek, getTodayCivilDate, formatCivilDate, isPastCivilDate, isPastTimeSlot } from './dateUtils';
+import { getDayOfWeek, getTodayCivilDate, formatCivilDate, formatBrDate, isPastCivilDate, isPastTimeSlot } from './dateUtils';
 import { PLAYER_AVATARS_BUCKET, validateAvatarFile, convertImageToWebp } from './avatarImage';
 import { LocalCache } from './cache';
 import { clearAllMemoryCache } from './swr';
@@ -2230,24 +2231,24 @@ export const DbService = {
   },
 
   // ==========================================
-  // ESTATÍSTICAS ESPORTIVAS E RANKING
+  // ESTATÍSTICAS ESPORTIVAS, CONFRONTO DIRETO E RANKING
   // ==========================================
 
   async getPlayerStatistics(userId: string, groupId: string): Promise<EstatisticasJogador> {
     const db = requireDb();
 
-    // Carregar todas as partidas finalizadas do usuário no grupo
-    const { data: matches, error } = await db
+    // Carregar todas as partidas do usuário no grupo (para ter contagens totais e estatísticas de jogos concluídos)
+    const { data: rawMatches, error } = await db
       .from('partidas')
       .select(`
         *,
         jogador_1:usuarios!partidas_jogador_1_id_fkey(*),
         jogador_2:usuarios!partidas_jogador_2_id_fkey(*),
         vencedor:usuarios!partidas_vencedor_id_fkey(*),
+        reserva:reservas(*, quadra:quadras(*), horario:horarios(*)),
         partida_sets(*)
       `)
       .eq('grupo_id', groupId)
-      .eq('status', 'FINALIZADA')
       .or(`jogador_1_id.eq.${userId},jogador_2_id.eq.${userId}`)
       .order('criado_em', { ascending: false });
 
@@ -2267,18 +2268,26 @@ export const DbService = {
       memberClassMap.set(m.usuario_id, classFromDb(m.classe));
     });
 
-    const totalPartidas = (matches || []).length;
+    // Deduplicação por ID de partida
+    const matchMap = new Map<string, any>();
+    (rawMatches || []).forEach((m: any) => {
+      if (m && m.id && !matchMap.has(m.id)) {
+        matchMap.set(m.id, m);
+      }
+    });
+    const allUserMatches = Array.from(matchMap.values());
+
+    const totalCadastradas = allUserMatches.length;
+    let partidasAgendadas = 0;
+    let partidasAguardandoResultado = 0;
+    let partidasConcluidas = 0;
+
     let vitorias = 0;
     let derrotas = 0;
     let setsVencidos = 0;
     let setsPerdidos = 0;
     let gamesVencidos = 0;
     let gamesPerdidos = 0;
-
-    // Sequência atual e maior sequência
-    let sequenciaAtual = 0;
-    let maiorSequencia = 0;
-    let seqContador = 0;
 
     // Map por classe do adversário
     const classStatsMap: Record<string, { vitorias: number; derrotas: number }> = {};
@@ -2297,80 +2306,166 @@ export const DbService = {
       total: 0
     }));
 
-    // Partidas ordenadas cronologicamente para calcular sequências
-    const chronological = [...(matches || [])].reverse();
+    // Lista de partidas concluídas com resultado confirmado para cálculo de sequências
+    const concludedMatchesWithWinner: { match: any; isWinner: boolean; date: string }[] = [];
 
-    chronological.forEach((m: any) => {
-      const isWinner = m.vencedor_id === userId;
-      if (isWinner) {
-        seqContador++;
-        if (seqContador > maiorSequencia) maiorSequencia = seqContador;
-      } else {
-        seqContador = 0;
+    allUserMatches.forEach((m: any) => {
+      const statusUpper = String(m.status || '').toUpperCase().trim();
+      const isJ1 = m.jogador_1_id === userId;
+      const opponentId = isJ1 ? m.jogador_2_id : m.jogador_1_id;
+      const opponentClass = memberClassMap.get(opponentId) || 'Sem Classe';
+
+      // 1. Categorizar status da partida
+      if (['PENDENTE', 'AGUARDANDO_ACEITE', 'ACEITA', 'CONFIRMADA'].includes(statusUpper)) {
+        partidasAgendadas++;
+      } else if (['AGUARDANDO_RESULTADO', 'AGUARDANDO_CONFIRMACAO_RESULTADO'].includes(statusUpper)) {
+        partidasAguardandoResultado++;
+      }
+
+      // 2. Avaliar se a partida é concluída com resultado esportivo confirmado
+      const isStatusConcluded = ['CONCLUIDA', 'FINALIZADA', 'REALIZADA'].includes(statusUpper);
+      
+      // Parsear os sets na perspectiva do usuário
+      let parsedSets: { myGames: number; oppGames: number }[] = [];
+      const dbSets = m.partida_sets || [];
+      if (dbSets.length > 0) {
+        parsedSets = dbSets
+          .slice()
+          .sort((a: any, b: any) => (a.numero_set || 0) - (b.numero_set || 0))
+          .map((s: any) => {
+            const g1 = Number(s.jogador_1_games || 0);
+            const g2 = Number(s.jogador_2_games || 0);
+            return {
+              myGames: isJ1 ? g1 : g2,
+              oppGames: isJ1 ? g2 : g1
+            };
+          });
+      } else if (m.detalhes_placar) {
+        const rawPlacar = String(m.detalhes_placar).trim();
+        const chunks = rawPlacar.split(/[,;\n]+/).map((c) => c.trim()).filter(Boolean);
+        chunks.forEach((chunk) => {
+          const matchRegex = chunk.match(/(\d+)\s*[/xX×\-–—]\s*(\d+)/);
+          if (matchRegex) {
+            const g1 = parseInt(matchRegex[1], 10);
+            const g2 = parseInt(matchRegex[2], 10);
+            parsedSets.push({
+              myGames: isJ1 ? g1 : g2,
+              oppGames: isJ1 ? g2 : g1
+            });
+          }
+        });
+      }
+
+      // Determinar vitória / derrota
+      let isWinner = false;
+      let hasConfirmedWinner = false;
+
+      if (m.vencedor_id) {
+        isWinner = m.vencedor_id === userId;
+        hasConfirmedWinner = true;
+      } else if (isStatusConcluded && parsedSets.length > 0) {
+        let setsWonCount = 0;
+        let setsLostCount = 0;
+        parsedSets.forEach((s) => {
+          if (s.myGames > s.oppGames) setsWonCount++;
+          else if (s.oppGames > s.myGames) setsLostCount++;
+        });
+        if (setsWonCount > setsLostCount) {
+          isWinner = true;
+          hasConfirmedWinner = true;
+        } else if (setsLostCount > setsWonCount) {
+          isWinner = false;
+          hasConfirmedWinner = true;
+        }
+      }
+
+      // Somente entra nas estatísticas esportivas se for concluída e tiver vencedor confirmado
+      if (isStatusConcluded || hasConfirmedWinner) {
+        partidasConcluidas++;
+
+        if (isWinner) {
+          vitorias++;
+        } else {
+          derrotas++;
+        }
+
+        // Estatística por classe do adversário
+        if (opponentClass && classStatsMap[opponentClass]) {
+          if (isWinner) classStatsMap[opponentClass].vitorias++;
+          else classStatsMap[opponentClass].derrotas++;
+        }
+
+        // Sets e games (apenas válidos com pontuação)
+        parsedSets.forEach((s) => {
+          if (s.myGames > 0 || s.oppGames > 0) {
+            gamesVencidos += s.myGames;
+            gamesPerdidos += s.oppGames;
+
+            if (s.myGames > s.oppGames) {
+              setsVencidos++;
+            } else if (s.oppGames > s.myGames) {
+              setsPerdidos++;
+            }
+          }
+        });
+
+        // Desempenho Anual por Mês
+        const dateRaw = m.finalizado_em || m.reserva?.data || m.criado_em;
+        const matchDate = new Date(dateRaw);
+        if (!isNaN(matchDate.getTime()) && matchDate.getFullYear() === currentYear) {
+          const monthIdx = matchDate.getMonth();
+          if (monthIdx >= 0 && monthIdx < 12) {
+            mesesStats[monthIdx].total++;
+            if (isWinner) mesesStats[monthIdx].vitorias++;
+            else mesesStats[monthIdx].derrotas++;
+          }
+        }
+
+        concludedMatchesWithWinner.push({
+          match: m,
+          isWinner,
+          date: dateRaw || ''
+        });
       }
     });
 
-    // Sequência atual (a partir do jogo mais recente)
-    for (const m of matches || []) {
-      if (m.vencedor_id === userId) {
+    // 3. Cálculo de Sequências (Ordenação cronológica)
+    concludedMatchesWithWinner.sort((a, b) => {
+      const tA = new Date(a.date).getTime() || 0;
+      const tB = new Date(b.date).getTime() || 0;
+      if (tA !== tB) return tA - tB;
+      return String(a.match.criado_em || '').localeCompare(String(b.match.criado_em || ''));
+    });
+
+    let maiorSequencia = 0;
+    let streakCount = 0;
+    concludedMatchesWithWinner.forEach((item) => {
+      if (item.isWinner) {
+        streakCount++;
+        if (streakCount > maiorSequencia) maiorSequencia = streakCount;
+      } else {
+        streakCount = 0;
+      }
+    });
+
+    // Sequência atual: a partir do jogo concluído mais recente
+    let sequenciaAtual = 0;
+    const reverseChronological = [...concludedMatchesWithWinner].reverse();
+    for (const item of reverseChronological) {
+      if (item.isWinner) {
         sequenciaAtual++;
       } else {
         break;
       }
     }
 
-    (matches || []).forEach((m: any) => {
-      const isJ1 = m.jogador_1_id === userId;
-      const isWinner = m.vencedor_id === userId;
-      const opponentId = isJ1 ? m.jogador_2_id : m.jogador_1_id;
-      const opponentClass = memberClassMap.get(opponentId) || 'Sem Classe';
-
-      if (isWinner) {
-        vitorias++;
-      } else {
-        derrotas++;
-      }
-
-      // Estatística por classe do adversário
-      if (opponentClass && classStatsMap[opponentClass]) {
-        if (isWinner) classStatsMap[opponentClass].vitorias++;
-        else classStatsMap[opponentClass].derrotas++;
-      }
-
-      // Sets e games
-      const sets = m.partida_sets || [];
-      sets.forEach((s: any) => {
-        const myGames = isJ1 ? Number(s.jogador_1_games || 0) : Number(s.jogador_2_games || 0);
-        const oppGames = isJ1 ? Number(s.jogador_2_games || 0) : Number(s.jogador_1_games || 0);
-
-        gamesVencidos += myGames;
-        gamesPerdidos += oppGames;
-
-        if (myGames > oppGames) {
-          setsVencidos++;
-        } else if (oppGames > myGames) {
-          setsPerdidos++;
-        }
-      });
-
-      // Mês
-      const matchDate = new Date(m.criado_em || m.finalizado_em);
-      if (matchDate.getFullYear() === currentYear) {
-        const monthIdx = matchDate.getMonth();
-        if (monthIdx >= 0 && monthIdx < 12) {
-          mesesStats[monthIdx].total++;
-          if (isWinner) mesesStats[monthIdx].vitorias++;
-          else mesesStats[monthIdx].derrotas++;
-        }
-      }
-    });
-
     // Últimos 5 e 10 jogos
-    const last5 = (matches || []).slice(0, 5);
-    const last10 = (matches || []).slice(0, 10);
-    const vitoriasUltimos5 = last5.filter((m: any) => m.vencedor_id === userId).length;
-    const vitoriasUltimos10 = last10.filter((m: any) => m.vencedor_id === userId).length;
+    const last5 = reverseChronological.slice(0, 5);
+    const last10 = reverseChronological.slice(0, 10);
+    const vitoriasUltimos5 = last5.filter((i) => i.isWinner).length;
+    const vitoriasUltimos10 = last10.filter((i) => i.isWinner).length;
 
+    const totalPartidas = vitorias + derrotas;
     const aproveitamento = totalPartidas > 0 ? Math.round((vitorias / totalPartidas) * 100) : 0;
     const saldoGames = gamesVencidos - gamesPerdidos;
 
@@ -2390,6 +2485,10 @@ export const DbService = {
 
     return {
       totalPartidas,
+      totalCadastradas,
+      partidasAgendadas,
+      partidasAguardandoResultado,
+      partidasConcluidas,
       vitorias,
       derrotas,
       aproveitamento,
@@ -2409,6 +2508,185 @@ export const DbService = {
     };
   },
 
+  async getHeadToHead(userId: string, opponentId: string, groupId: string): Promise<ConfrontoDireto | null> {
+    const db = requireDb();
+
+    if (!userId || !opponentId || userId === opponentId) return null;
+
+    // 1. Carregar dados do adversário
+    const { data: oppUser, error: oppErr } = await db
+      .from('usuarios')
+      .select('*')
+      .eq('id', opponentId)
+      .single();
+
+    if (oppErr || !oppUser) return null;
+
+    // 2. Carregar classe do adversário no grupo
+    const { data: oppMember } = await db
+      .from('membros_grupo')
+      .select('classe')
+      .eq('grupo_id', groupId)
+      .eq('usuario_id', opponentId)
+      .maybeSingle();
+
+    const opponentClass = oppMember?.classe ? classFromDb(oppMember.classe) : undefined;
+
+    // 3. Carregar todas as partidas diretas entre os dois jogadores no grupo
+    const { data: rawMatches, error: matchErr } = await db
+      .from('partidas')
+      .select(`
+        *,
+        jogador_1:usuarios!partidas_jogador_1_id_fkey(*),
+        jogador_2:usuarios!partidas_jogador_2_id_fkey(*),
+        vencedor:usuarios!partidas_vencedor_id_fkey(*),
+        reserva:reservas(*, quadra:quadras(*), horario:horarios(*)),
+        partida_sets(*)
+      `)
+      .eq('grupo_id', groupId)
+      .or(
+        `and(jogador_1_id.eq.${userId},jogador_2_id.eq.${opponentId}),and(jogador_1_id.eq.${opponentId},jogador_2_id.eq.${userId})`
+      )
+      .order('criado_em', { ascending: false });
+
+    if (matchErr) {
+      console.error('[getHeadToHead Error]:', matchErr);
+      fail('Erro ao carregar confronto direto', matchErr);
+    }
+
+    // Deduplicação por ID
+    const matchMap = new Map<string, any>();
+    (rawMatches || []).forEach((m: any) => {
+      if (m && m.id && !matchMap.has(m.id)) matchMap.set(m.id, m);
+    });
+    const matches = Array.from(matchMap.values());
+
+    let vitoriasUsuario = 0;
+    let vitoriasAdversario = 0;
+    let setsVencidosUsuario = 0;
+    let setsVencidosAdversario = 0;
+    let gamesGanhosUsuario = 0;
+    let gamesGanhosAdversario = 0;
+
+    const ultimosConfrontos: ConfrontoPartidaResumo[] = [];
+
+    matches.forEach((m: any) => {
+      const statusUpper = String(m.status || '').toUpperCase().trim();
+      const isStatusConcluded = ['CONCLUIDA', 'FINALIZADA', 'REALIZADA'].includes(statusUpper);
+      const isJ1 = m.jogador_1_id === userId;
+
+      // Parsear sets
+      let sets: { numero: number; myGames: number; oppGames: number; label: string }[] = [];
+      const dbSets = m.partida_sets || [];
+      if (dbSets.length > 0) {
+        sets = dbSets
+          .slice()
+          .sort((a: any, b: any) => (a.numero_set || 0) - (b.numero_set || 0))
+          .map((s: any, idx: number) => {
+            const g1 = Number(s.jogador_1_games || 0);
+            const g2 = Number(s.jogador_2_games || 0);
+            const myGames = isJ1 ? g1 : g2;
+            const oppGames = isJ1 ? g2 : g1;
+            return {
+              numero: s.numero_set || idx + 1,
+              myGames,
+              oppGames,
+              label: `${myGames} × ${oppGames}`
+            };
+          });
+      } else if (m.detalhes_placar) {
+        const rawPlacar = String(m.detalhes_placar).trim();
+        const chunks = rawPlacar.split(/[,;\n]+/).map((c) => c.trim()).filter(Boolean);
+        chunks.forEach((chunk, idx) => {
+          const matchRegex = chunk.match(/(\d+)\s*[/xX×\-–—]\s*(\d+)/);
+          if (matchRegex) {
+            const g1 = parseInt(matchRegex[1], 10);
+            const g2 = parseInt(matchRegex[2], 10);
+            const myGames = isJ1 ? g1 : g2;
+            const oppGames = isJ1 ? g2 : g1;
+            sets.push({
+              numero: idx + 1,
+              myGames,
+              oppGames,
+              label: `${myGames} × ${oppGames}`
+            });
+          }
+        });
+      }
+
+      // Determinar vitória
+      let vitoriaUsuario = false;
+      let hasWinner = false;
+      if (m.vencedor_id) {
+        vitoriaUsuario = m.vencedor_id === userId;
+        hasWinner = true;
+      } else if (isStatusConcluded && sets.length > 0) {
+        let won = 0;
+        let lost = 0;
+        sets.forEach((s) => {
+          if (s.myGames > s.oppGames) won++;
+          else if (s.oppGames > s.myGames) lost++;
+        });
+        if (won > lost) {
+          vitoriaUsuario = true;
+          hasWinner = true;
+        } else if (lost > won) {
+          vitoriaUsuario = false;
+          hasWinner = true;
+        }
+      }
+
+      const isWO = String(m.detalhes_placar || '').toUpperCase().includes('W.O.') || String(m.detalhes_placar || '').toUpperCase().includes('WO');
+
+      if (isStatusConcluded || hasWinner) {
+        if (vitoriaUsuario) vitoriasUsuario++;
+        else vitoriasAdversario++;
+
+        sets.forEach((s) => {
+          gamesGanhosUsuario += s.myGames;
+          gamesGanhosAdversario += s.oppGames;
+          if (s.myGames > s.oppGames) setsVencidosUsuario++;
+          else if (s.oppGames > s.myGames) setsVencidosAdversario++;
+        });
+
+        const dateFormatted = m.reserva?.data ? formatBrDate(m.reserva.data) : (m.finalizado_em ? formatBrDate(formatCivilDate(m.finalizado_em)) : (m.criado_em ? formatBrDate(formatCivilDate(m.criado_em)) : ''));
+        const quadraFormatted = m.reserva?.quadra?.nome || (m.reserva?.quadra_numero ? `Quadra ${m.reserva.quadra_numero}` : 'Quadra Principal');
+        const placarFormatted = sets.length > 0 ? sets.map((s) => s.label).join(' · ') : (m.detalhes_placar || (isWO ? 'W.O.' : 'Concluída'));
+
+        ultimosConfrontos.push({
+          id: m.id,
+          dataTexto: dateFormatted,
+          quadraTexto: quadraFormatted,
+          placarTexto: placarFormatted,
+          sets,
+          vitoriaUsuario,
+          isWO
+        });
+      }
+    });
+
+    const totalPartidas = vitoriasUsuario + vitoriasAdversario;
+    const aproveitamentoUsuario = totalPartidas > 0 ? Math.round((vitoriasUsuario / totalPartidas) * 100) : 0;
+    const aproveitamentoAdversario = totalPartidas > 0 ? Math.round((vitoriasAdversario / totalPartidas) * 100) : 0;
+    const saldoGamesUsuario = gamesGanhosUsuario - gamesGanhosAdversario;
+
+    return {
+      adversario: mapUser(oppUser),
+      adversarioClasse: opponentClass,
+      totalPartidas,
+      vitoriasUsuario,
+      vitoriasAdversario,
+      aproveitamentoUsuario,
+      aproveitamentoAdversario,
+      setsVencidosUsuario,
+      setsVencidosAdversario,
+      gamesGanhosUsuario,
+      gamesGanhosAdversario,
+      saldoGamesUsuario,
+      ultimosConfrontos
+    };
+  },
+
   async getGroupRanking(groupId: string): Promise<RankingJogador[]> {
     const db = requireDb();
 
@@ -2421,12 +2699,12 @@ export const DbService = {
 
     if (memErr) fail('Erro ao carregar ranking do grupo', memErr);
 
-    // 2. Obter todas as partidas finalizadas do grupo
+    // 2. Obter todas as partidas concluídas do grupo
     const { data: matches, error: matchErr } = await db
       .from('partidas')
-      .select('id, jogador_1_id, jogador_2_id, vencedor_id')
+      .select('id, jogador_1_id, jogador_2_id, vencedor_id, status')
       .eq('grupo_id', groupId)
-      .eq('status', 'FINALIZADA');
+      .in('status', ['FINALIZADA', 'CONCLUIDA', 'REALIZADA']);
 
     if (matchErr) fail('Erro ao carregar histórico para o ranking', matchErr);
 
@@ -2439,12 +2717,12 @@ export const DbService = {
       if (statsByUser[m.jogador_1_id]) {
         statsByUser[m.jogador_1_id].partidas++;
         if (m.vencedor_id === m.jogador_1_id) statsByUser[m.jogador_1_id].vitorias++;
-        else statsByUser[m.jogador_1_id].derrotas++;
+        else if (m.vencedor_id === m.jogador_2_id) statsByUser[m.jogador_1_id].derrotas++;
       }
       if (statsByUser[m.jogador_2_id]) {
         statsByUser[m.jogador_2_id].partidas++;
         if (m.vencedor_id === m.jogador_2_id) statsByUser[m.jogador_2_id].vitorias++;
-        else statsByUser[m.jogador_2_id].derrotas++;
+        else if (m.vencedor_id === m.jogador_1_id) statsByUser[m.jogador_2_id].derrotas++;
       }
     });
 

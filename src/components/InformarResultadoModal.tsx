@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Partida, AuthSession } from '../types';
 import { DbService } from '../lib/db';
 import { toast } from '../lib/toast';
+import { invalidateCache } from '../lib/swr';
 import {
   Trophy,
   Camera,
@@ -191,6 +192,14 @@ export const InformarResultadoModal: React.FC<InformarResultadoModalProps> = ({
       });
 
       const opponentFormattedName = user.id === partida.jogador_1_id ? j2Name : j1Name;
+
+      // Invalidação de cache das estatísticas e partidas dos jogadores
+      invalidateCache('statistics', user.id, activeGroup.id);
+      if (partida.jogador_1_id) invalidateCache('statistics', partida.jogador_1_id, activeGroup.id);
+      if (partida.jogador_2_id) invalidateCache('statistics', partida.jogador_2_id, activeGroup.id);
+      invalidateCache('matches', user.id, activeGroup.id);
+      invalidateCache('group_ranking', undefined, activeGroup.id);
+      invalidateCache('group_feed', undefined, activeGroup.id);
 
       toast.success(
         isAdminOrOwner

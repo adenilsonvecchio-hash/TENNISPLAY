@@ -211,7 +211,11 @@ export interface DesempenhoMes {
 }
 
 export interface EstatisticasJogador {
-  totalPartidas: number;
+  totalPartidas: number; // Partidas concluídas válidas para estatísticas
+  totalCadastradas?: number; // Total de partidas em qualquer status
+  partidasAgendadas?: number; // Próximas / confirmadas / aceitas
+  partidasAguardandoResultado?: number; // Aguardando resultado ou confirmação
+  partidasConcluidas?: number; // Concluídas com resultado confirmado
   vitorias: number;
   derrotas: number;
   aproveitamento: number; // 0..100
@@ -229,6 +233,32 @@ export interface EstatisticasJogador {
   porClasse: EstatisticasPorClasse[];
   desempenhoAnual: DesempenhoMes[];
   rankingPosicao?: number;
+}
+
+export interface ConfrontoPartidaResumo {
+  id: string;
+  dataTexto: string;
+  quadraTexto: string;
+  placarTexto: string;
+  sets: { numero: number; myGames: number; oppGames: number; label: string }[];
+  vitoriaUsuario: boolean;
+  isWO: boolean;
+}
+
+export interface ConfrontoDireto {
+  adversario: Usuario;
+  adversarioClasse?: PlayerClass;
+  totalPartidas: number;
+  vitoriasUsuario: number;
+  vitoriasAdversario: number;
+  aproveitamentoUsuario: number;
+  aproveitamentoAdversario: number;
+  setsVencidosUsuario: number;
+  setsVencidosAdversario: number;
+  gamesGanhosUsuario: number;
+  gamesGanhosAdversario: number;
+  saldoGamesUsuario: number;
+  ultimosConfrontos: ConfrontoPartidaResumo[];
 }
 
 export interface RankingJogador {

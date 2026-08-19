@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { AuthSession, EstatisticasJogador, Partida, FeedItem, PlayerClass, RankingJogador } from '../types';
+import { AuthSession, EstatisticasJogador, Partida, FeedItem, PlayerClass, RankingJogador, ConfrontoDireto } from '../types';
 import { DbService } from '../lib/db';
 import { toast } from '../lib/toast';
 import { formatLocation } from '../lib/location';
 import { validateAvatarFile, formatAvatarUrlWithCacheBust } from '../lib/avatarImage';
 import { formatBrDate, formatCivilDate } from '../lib/dateUtils';
+import { LocalCache } from '../lib/cache';
+import { invalidateCache } from '../lib/swr';
 import {
   Trophy,
   Camera,
@@ -27,7 +29,10 @@ import {
   Share2,
   KeyRound,
   ShieldCheck,
-  Zap
+  Zap,
+  Users,
+  Search,
+  ArrowRightLeft
 } from 'lucide-react';
 import { InformarResultadoModal } from './InformarResultadoModal';
 import { ConfirmarResultadoModal } from './ConfirmarResultadoModal';
@@ -50,10 +55,23 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
   const [matchTab, setMatchTab] = useState<'PROXIMAS' | 'HISTORICO'>('PROXIMAS');
 
   // Stats & Matches & Feed
-  const [stats, setStats] = useState<EstatisticasJogador | null>(null);
+  const [stats, setStats] = useState<EstatisticasJogador | null>(() => {
+    if (user && activeGroup) {
+      const cached = LocalCache.get<EstatisticasJogador>('statistics', user.id, activeGroup.id);
+      return cached?.data || null;
+    }
+    return null;
+  });
   const [matches, setMatches] = useState<Partida[]>([]);
   const [feedItems, setFeedItems] = useState<FeedItem[]>([]);
   const [rankingPos, setRankingPos] = useState<number | null>(null);
+  const [groupRanking, setGroupRanking] = useState<RankingJogador[]>([]);
+
+  // Head-to-Head (Confronto Direto)
+  const [confrontoAdversarioId, setConfrontoAdversarioId] = useState<string>('');
+  const [confrontoData, setConfrontoData] = useState<ConfrontoDireto | null>(null);
+  const [loadingConfronto, setLoadingConfronto] = useState<boolean>(false);
+  const [searchOpponentQuery, setSearchOpponentQuery] = useState<string>('');
 
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -68,6 +86,7 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
   const [selectedMatchForScore, setSelectedMatchForScore] = useState<Partida | null>(null);
   const [selectedMatchForConfirm, setSelectedMatchForConfirm] = useState<Partida | null>(null);
   const [showJogarModal, setShowJogarModal] = useState(false);
+  const [opponentToChallenge, setOpponentToChallenge] = useState<string | undefined>(undefined);
 
   // Edit Profile / Password Modal
   const [showPassModal, setShowPassModal] = useState(false);
@@ -80,8 +99,15 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
   const [editNome, setEditNome] = useState(user?.nome || '');
   const [editPhone, setEditPhone] = useState(user?.whatsapp || '');
 
-  const loadData = async () => {
+  const loadData = async (forceInvalidate = false) => {
     if (!user || !activeGroup) return;
+
+    if (forceInvalidate) {
+      invalidateCache('statistics', user.id, activeGroup.id);
+      invalidateCache('matches', user.id, activeGroup.id);
+      invalidateCache('group_ranking', undefined, activeGroup.id);
+      invalidateCache('group_feed', undefined, activeGroup.id);
+    }
 
     try {
       const [statsData, matchesData, feedData, rankingData] = await Promise.all([
@@ -92,16 +118,47 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
       ]);
 
       setStats(statsData);
+      LocalCache.set('statistics', statsData, user.id, activeGroup.id);
+
       setMatches(matchesData);
+      LocalCache.set('matches', matchesData, user.id, activeGroup.id);
+
       setFeedItems(feedData);
+      setGroupRanking(rankingData);
 
       const userRank = rankingData.find((r) => r.usuario.id === user.id);
       if (userRank) setRankingPos(userRank.posicao);
+
+      // Atualizar confronto direto se houver um adversário selecionado
+      if (confrontoAdversarioId) {
+        handleSelectOpponentForComparison(confrontoAdversarioId, false);
+      }
     } catch (err: any) {
       console.error('Erro ao carregar perfil esportivo:', err);
     } finally {
       setLoading(false);
       setIsRefreshing(false);
+    }
+  };
+
+  const handleSelectOpponentForComparison = async (opponentId: string, showSpinner = true) => {
+    if (!user || !activeGroup || !opponentId) {
+      setConfrontoAdversarioId('');
+      setConfrontoData(null);
+      return;
+    }
+
+    setConfrontoAdversarioId(opponentId);
+    if (showSpinner) setLoadingConfronto(true);
+
+    try {
+      const h2h = await DbService.getHeadToHead(user.id, opponentId, activeGroup.id);
+      setConfrontoData(h2h);
+    } catch (err: any) {
+      console.error('Erro ao carregar confronto direto:', err);
+      toast.error('Não foi possível carregar o confronto direto com este adversário.');
+    } finally {
+      if (showSpinner) setLoadingConfronto(false);
     }
   };
 
@@ -121,7 +178,7 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
 
   const handleRefresh = () => {
     setIsRefreshing(true);
-    loadData();
+    loadData(true);
     onRefreshSession();
   };
 
@@ -784,6 +841,255 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
             </div>
           </div>
 
+          {/* COMPARAÇÃO DIRETA ENTRE JOGADORES (HEAD TO HEAD) */}
+          <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-2xs space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-black text-slate-900">Comparação Direta (Head to Head)</h3>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-slate-100 text-slate-700 border border-slate-200">
+                    Histórico & Métricas
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 font-medium mt-0.5">
+                  Compare seu retrospecto de vitórias, sets e games contra qualquer jogador do clube
+                </p>
+              </div>
+
+              {/* SELETOR DE ADVERSÁRIO */}
+              <div className="relative min-w-[240px]">
+                <select
+                  value={confrontoAdversarioId}
+                  onChange={(e) => handleSelectOpponentForComparison(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900 cursor-pointer appearance-none pr-9"
+                >
+                  <option value="">Selecione um adversário para comparar...</option>
+                  {groupRanking
+                    .filter((r) => r.usuario.id !== user.id)
+                    .map((r) => (
+                      <option key={r.usuario.id} value={r.usuario.id}>
+                        {r.usuario.nome} ({r.classe || 'Sem Classe'} - #{r.posicao})
+                      </option>
+                    ))}
+                </select>
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                  <ArrowRightLeft className="w-3.5 h-3.5" />
+                </div>
+              </div>
+            </div>
+
+            {/* CONTEÚDO DO CONFRONTO DIRETO */}
+            {loadingConfronto ? (
+              <div className="py-12 flex flex-col items-center justify-center gap-2 text-slate-400">
+                <RefreshCw className="w-6 h-6 animate-spin text-slate-600" />
+                <span className="text-xs font-bold">Calculando retrospecto do confronto direto...</span>
+              </div>
+            ) : !confrontoAdversarioId ? (
+              <div className="p-8 rounded-2xl bg-slate-50/70 border border-dashed border-slate-200 text-center space-y-2">
+                <div className="w-10 h-10 mx-auto rounded-xl bg-white border border-slate-200 flex items-center justify-center text-slate-500 shadow-2xs">
+                  <ArrowRightLeft className="w-5 h-5" />
+                </div>
+                <p className="text-xs font-black text-slate-700">Selecione um jogador acima para visualizar o confronto direto</p>
+                <p className="text-[11px] text-slate-400 font-medium">
+                  Veja vitórias mútuas, aproveitamento, sets vencidos/perdidos, saldo de games e histórico completo de partidas.
+                </p>
+              </div>
+            ) : confrontoData ? (
+              <div className="space-y-5 animate-in fade-in">
+                
+                {/* CABEÇALHO VISUAL: USUÁRIO vs ADVERSÁRIO */}
+                <div className="p-4 sm:p-5 rounded-2xl bg-slate-900 text-white flex flex-col sm:flex-row items-center justify-between gap-4 shadow-md">
+                  
+                  {/* JOGADOR 1 (USUÁRIO) */}
+                  <div className="flex items-center gap-3 min-w-0 flex-1 justify-center sm:justify-start">
+                    <div className="w-12 h-12 rounded-2xl bg-slate-800 border-2 border-white/20 flex items-center justify-center font-black text-sm shrink-0 overflow-hidden shadow-xs">
+                      {avatarDisplayUrl || user.foto_url ? (
+                        <img src={(avatarDisplayUrl || user.foto_url)!} alt={user.nome} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                      ) : (
+                        <span>{user.nome.charAt(0).toUpperCase()}</span>
+                      )}
+                    </div>
+                    <div className="min-w-0 text-center sm:text-left">
+                      <span className="text-[10px] font-extrabold uppercase text-slate-400 block">Você</span>
+                      <h4 className="text-sm font-black truncate">{user.nome}</h4>
+                      <span className="inline-block text-[10px] font-black px-2 py-0.5 rounded-md bg-white/10 text-slate-200 mt-0.5">
+                        {playerClass}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* PLACAR GERAL DE CONFRONTOS */}
+                  <div className="flex flex-col items-center justify-center px-4 py-2 rounded-xl bg-white/10 border border-white/10 text-center shrink-0">
+                    <span className="text-[10px] font-black uppercase text-[#ccff00] tracking-wider">
+                      Vitórias no Confronto
+                    </span>
+                    <div className="text-2xl sm:text-3xl font-black tracking-tight text-white flex items-center gap-2">
+                      <span className={confrontoData.vitoriasUsuario > confrontoData.vitoriasAdversario ? 'text-[#ccff00]' : 'text-white'}>
+                        {confrontoData.vitoriasUsuario}
+                      </span>
+                      <span className="text-slate-400 text-lg">×</span>
+                      <span className={confrontoData.vitoriasAdversario > confrontoData.vitoriasUsuario ? 'text-[#ccff00]' : 'text-white'}>
+                        {confrontoData.vitoriasAdversario}
+                      </span>
+                    </div>
+                    <span className="text-[10px] text-slate-300 font-bold">
+                      {confrontoData.totalPartidas} {confrontoData.totalPartidas === 1 ? 'jogo disputado' : 'jogos disputados'}
+                    </span>
+                  </div>
+
+                  {/* JOGADOR 2 (ADVERSÁRIO) */}
+                  <div className="flex items-center gap-3 min-w-0 flex-1 justify-center sm:justify-end flex-row-reverse sm:flex-row">
+                    <div className="min-w-0 text-center sm:text-right">
+                      <span className="text-[10px] font-extrabold uppercase text-slate-400 block">Adversário</span>
+                      <h4 className="text-sm font-black truncate">{confrontoData.adversario.nome}</h4>
+                      <span className="inline-block text-[10px] font-black px-2 py-0.5 rounded-md bg-white/10 text-slate-200 mt-0.5">
+                        {confrontoData.adversarioClasse || 'Sem Classe'}
+                      </span>
+                    </div>
+                    <div className="w-12 h-12 rounded-2xl bg-slate-800 border-2 border-white/20 flex items-center justify-center font-black text-sm shrink-0 overflow-hidden shadow-xs">
+                      {confrontoData.adversario.foto_url ? (
+                        <img src={confrontoData.adversario.foto_url} alt={confrontoData.adversario.nome} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                      ) : (
+                        <span>{confrontoData.adversario.nome.charAt(0).toUpperCase()}</span>
+                      )}
+                    </div>
+                  </div>
+
+                </div>
+
+                {/* BARRA COMPARATIVA DE APROVEITAMENTO */}
+                {confrontoData.totalPartidas > 0 && (
+                  <div className="space-y-1.5 p-4 rounded-2xl bg-slate-50 border border-slate-200/80">
+                    <div className="flex items-center justify-between text-xs font-black">
+                      <span className="text-emerald-700">{confrontoData.aproveitamentoUsuario}% Aproveitamento</span>
+                      <span className="text-slate-500 font-bold uppercase text-[10px]">Taxa de Vitória</span>
+                      <span className="text-rose-700">{confrontoData.aproveitamentoAdversario}% Aproveitamento</span>
+                    </div>
+                    <div className="h-2.5 rounded-full bg-slate-200 overflow-hidden flex shadow-inner">
+                      <div
+                        className="bg-emerald-500 h-full transition-all"
+                        style={{ width: `${confrontoData.aproveitamentoUsuario}%` }}
+                      />
+                      <div
+                        className="bg-rose-400 h-full transition-all"
+                        style={{ width: `${confrontoData.aproveitamentoAdversario}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* MÉTRICAS DETALHADAS DE SETS E GAMES */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  
+                  {/* SETS NO CONFRONTO */}
+                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1">
+                    <span className="text-[10px] font-extrabold uppercase text-slate-400 block">Sets Disputados</span>
+                    <div className="text-lg font-black text-slate-900">
+                      {confrontoData.setsVencidosUsuario} <span className="text-slate-400 font-normal">×</span> {confrontoData.setsVencidosAdversario}
+                    </div>
+                    <span className="text-[11px] font-bold text-slate-500 block">
+                      {confrontoData.setsVencidosUsuario >= confrontoData.setsVencidosAdversario ? 'Saldo positivo em sets' : 'Saldo negativo em sets'}
+                    </span>
+                  </div>
+
+                  {/* GAMES NO CONFRONTO */}
+                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1">
+                    <span className="text-[10px] font-extrabold uppercase text-slate-400 block">Games Ganhos × Cedidos</span>
+                    <div className="text-lg font-black text-slate-900">
+                      {confrontoData.gamesGanhosUsuario} <span className="text-slate-400 font-normal">×</span> {confrontoData.gamesGanhosAdversario}
+                    </div>
+                    <span className={`text-[11px] font-black ${confrontoData.saldoGamesUsuario >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                      Saldo: {confrontoData.saldoGamesUsuario >= 0 ? `+${confrontoData.saldoGamesUsuario}` : confrontoData.saldoGamesUsuario}
+                    </span>
+                  </div>
+
+                  {/* AÇÃO: DESAFIAR / REVANCHE */}
+                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex flex-col items-center justify-center text-center space-y-2">
+                    <span className="text-[10px] font-extrabold uppercase text-slate-400 block">Novo Jogo</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOpponentToChallenge(confrontoData.adversario.id);
+                        setShowJogarModal(true);
+                      }}
+                      className="px-4 py-2 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-[#ccff00] text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
+                    >
+                      <Swords className="w-3.5 h-3.5" />
+                      <span>Desafiar Jogador</span>
+                    </button>
+                  </div>
+
+                </div>
+
+                {/* HISTÓRICO DE PARTIDAS DIRETAS */}
+                <div className="space-y-3 pt-2">
+                  <h4 className="text-xs font-black uppercase tracking-wider text-slate-400">
+                    Histórico de Partidas Diretas ({confrontoData.ultimosConfrontos.length})
+                  </h4>
+
+                  {confrontoData.ultimosConfrontos.length === 0 ? (
+                    <div className="p-6 rounded-2xl bg-slate-50 text-center text-slate-500 text-xs font-bold border border-slate-100">
+                      Nenhuma partida finalizada entre vocês ainda. Marque um jogo para inaugurar o histórico!
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {confrontoData.ultimosConfrontos.map((c) => (
+                        <div
+                          key={c.id}
+                          className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2.5"
+                        >
+                          <div className="flex items-center justify-between">
+                            {c.isWO ? (
+                              <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300">
+                                W.O.
+                              </span>
+                            ) : c.vitoriaUsuario ? (
+                              <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-emerald-500 text-white shadow-2xs flex items-center gap-1">
+                                <Trophy className="w-3 h-3" />
+                                <span>VITÓRIA</span>
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-rose-500 text-white shadow-2xs">
+                                DERROTA
+                              </span>
+                            )}
+
+                            <span className="text-[11px] font-bold text-slate-500">{c.dataTexto}</span>
+                          </div>
+
+                          <div className="space-y-1">
+                            <span className="text-[10px] font-extrabold uppercase text-slate-400 block">Placar</span>
+                            {c.sets.length > 0 ? (
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                {c.sets.map((s, sIdx) => (
+                                  <span
+                                    key={sIdx}
+                                    className="px-2.5 py-0.5 rounded-lg bg-white border border-slate-200 text-xs font-black text-slate-900 shadow-2xs"
+                                  >
+                                    {s.label}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-xs font-black text-slate-800">{c.placarTexto}</span>
+                            )}
+                          </div>
+
+                          <div className="text-[11px] font-medium text-slate-400 pt-1 border-t border-slate-200/60 flex items-center gap-1">
+                            <MapPin className="w-3 h-3 text-slate-400" />
+                            <span>{c.quadraTexto}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+              </div>
+            ) : null}
+
+          </div>
+
         </div>
       )}
 
@@ -1263,9 +1569,15 @@ export const PerfilEsportivo: React.FC<PerfilEsportivoProps> = ({ session, onRef
         <JogarFlowModal
           session={session}
           isOpen={showJogarModal}
-          onClose={() => setShowJogarModal(false)}
+          preSelectedOpponentId={opponentToChallenge}
+          onClose={() => {
+            setShowJogarModal(false);
+            setOpponentToChallenge(undefined);
+          }}
           onSuccess={() => {
-            loadData();
+            setShowJogarModal(false);
+            setOpponentToChallenge(undefined);
+            loadData(true);
             onRefreshSession();
           }}
         />
