@@ -34,7 +34,9 @@ import {
   Users,
   Filter,
   ArrowDown,
-  UserCheck
+  UserCheck,
+  Swords,
+  Check
 } from 'lucide-react';
 
 interface AgendaReservasProps {
@@ -42,7 +44,7 @@ interface AgendaReservasProps {
   onRefreshSession?: () => void;
 }
 
-export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
+export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session, onRefreshSession }) => {
   const { user, activeGroup, activeRole } = session;
 
   const todayStr = getTodayCivilDate();
@@ -117,7 +119,7 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
     // Revalidação em segundo plano
     const [config, dayBookings, members] = await Promise.all([
       DbService.getGroupCourtConfig(activeGroup.id, selectedDate),
-      DbService.getBookingsForDate(activeGroup.id, selectedDate),
+      DbService.getBookingsForDate(activeGroup.id, selectedDate, user?.id),
       DbService.getGroupMembers(activeGroup.id)
     ]);
 
@@ -155,7 +157,20 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
             filter: `grupo_id=eq.${activeGroup.id}`
           },
           async () => {
-            const updated = await DbService.getBookingsForDate(activeGroup.id, selectedDate);
+            const updated = await DbService.getBookingsForDate(activeGroup.id, selectedDate, user?.id);
+            setBookings(updated);
+          }
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'partidas',
+            filter: `grupo_id=eq.${activeGroup.id}`
+          },
+          async () => {
+            const updated = await DbService.getBookingsForDate(activeGroup.id, selectedDate, user?.id);
             setBookings(updated);
           }
         )
@@ -165,7 +180,7 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
         supabase.removeChannel(channel);
       };
     }
-  }, [activeGroup?.id, selectedDate]);
+  }, [activeGroup?.id, selectedDate, user?.id]);
 
   if (!activeGroup || !user) return null;
 
@@ -336,11 +351,37 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
     }
   };
 
+  const handleAcceptChallenge = async (matchId: string) => {
+    try {
+      await DbService.acceptChallenge(matchId, user.id);
+      toast.success('Desafio aceito com sucesso! O jogo está confirmado na sua agenda. 🎾');
+      await refreshData();
+      if (onRefreshSession) onRefreshSession();
+    } catch (err: any) {
+      console.error('Erro ao aceitar desafio na agenda:', err);
+      toast.error(err.message || 'Não foi possível aceitar o desafio.');
+    }
+  };
+
+  const handleRejectChallenge = async (matchId: string) => {
+    try {
+      await DbService.rejectChallenge(matchId, user.id);
+      toast.success('Desafio recusado. A quadra e horário foram liberados.');
+      await refreshData();
+      if (onRefreshSession) onRefreshSession();
+    } catch (err: any) {
+      console.error('Erro ao recusar desafio na agenda:', err);
+      toast.error(err.message || 'Não foi possível recusar o desafio.');
+    }
+  };
+
   // Calculations for KPI Header Cards
   const totalSlotsPossible = courtConfig.qtd_quadras * courtConfig.horarios.length;
   const totalReservados = bookings.length;
   const totalLivres = Math.max(0, totalSlotsPossible - totalReservados);
-  const minhasReservas = bookings.filter(b => b.jogador_id === user.id);
+  const minhasReservas = bookings.filter(
+    b => b.jogador_id === user.id || b.partida?.jogador_2_id === user.id || b.adversario_id === user.id || b.jogador_2_id === user.id
+  );
   const taxaOcupacao = Math.round((totalReservados / (totalSlotsPossible || 1)) * 100);
 
   // Next game calculation for welcome banner
@@ -411,9 +452,17 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
                 <p className="font-black text-slate-900 text-sm sm:text-base">
                   Quadra {nextGame.quadra_numero} — {nextGame.horario_label}
                 </p>
-                <p className="text-xs text-slate-700 font-semibold flex items-center gap-1">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-slate-600" /> Confirmado (Meu Horário)
-                </p>
+                {nextGame.partida?.status === 'PENDENTE' ? (
+                  <p className="text-xs text-amber-700 font-semibold flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-amber-600 animate-pulse shrink-0" />
+                    <span>Pendente (Aguardando {nextGame.adversario_nome || nextGame.jogador_2_nome || 'o adversário'})</span>
+                  </p>
+                ) : (
+                  <p className="text-xs text-slate-700 font-semibold flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Confirmado {nextGame.adversario_nome ? `(vs ${nextGame.adversario_nome})` : '(Meu Horário)'}</span>
+                  </p>
+                )}
               </div>
             ) : (
               <p className="text-xs text-slate-500 font-medium">
@@ -650,15 +699,19 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
         <div className="flex items-center gap-5 flex-wrap">
           <div className="flex items-center gap-1.5">
             <span className="w-3.5 h-3.5 rounded-full bg-slate-400 border border-slate-500" />
-            <span>Livre / Disponível (Cinza)</span>
+            <span>Livre / Disponível</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="w-3.5 h-3.5 rounded-full bg-rose-500 border border-rose-600" />
-            <span>Reservado (Vermelho)</span>
+            <span className="w-3.5 h-3.5 rounded-full bg-amber-500 border border-amber-600" />
+            <span>Desafio Pendente</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className="w-3.5 h-3.5 rounded-full bg-blue-600 border border-blue-700" />
-            <span>Meu Horário (Azul)</span>
+            <span>Meu Horário / Confirmado</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-3.5 h-3.5 rounded-full bg-rose-500 border border-rose-600" />
+            <span>Reservado</span>
           </div>
         </div>
       </div>
@@ -724,10 +777,122 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
                     // Skip or keep according to filter logic
                   }
 
-                  const isMyBooking = existingBooking?.jogador_id === user.id;
+                  const match = existingBooking?.partida;
+                  const isChallenger = existingBooking?.jogador_id === user.id || match?.jogador_1_id === user.id;
+                  const isChallenged = match?.jogador_2_id === user.id || existingBooking?.adversario_id === user.id || existingBooking?.jogador_2_id === user.id;
+                  const hasMatch = !!existingBooking?.partida_id || !!match;
+                  const isPendingChallenge = hasMatch && match?.status === 'PENDENTE';
+                  const isAcceptedMatch = hasMatch && (match?.status === 'ACEITA' || match?.status === 'CONFIRMADA' || match?.status === 'EM_ANDAMENTO');
 
-                  // 1. MEU HORÁRIO (AZUL)
-                  if (existingBooking && isMyBooking) {
+                  const challengerName = existingBooking?.jogador_nome || existingBooking?.jogador_1_nome || match?.jogador_1?.nome || 'Jogador 1';
+                  const opponentName = existingBooking?.adversario_nome || existingBooking?.jogador_2_nome || match?.jogador_2?.nome || 'Adversário';
+
+                  // 1. DESAFIO ENVIADO POR VOCÊ (AGUARDANDO O ADVERSÁRIO)
+                  if (existingBooking && isChallenger && isPendingChallenge) {
+                    return (
+                      <div
+                        key={quadraNum}
+                        className="p-4 rounded-2xl bg-[#0F1E3D] text-white shadow-md border-2 border-amber-400 flex flex-col justify-between space-y-3"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="px-2.5 py-0.5 rounded-lg bg-white/20 text-white font-black text-[11px] uppercase tracking-wider">
+                            Quadra {quadraNum}
+                          </span>
+                          <span className="px-2.5 py-0.5 rounded-lg bg-amber-400 text-amber-950 font-black text-[10px] uppercase shadow-xs flex items-center gap-1">
+                            <Clock className="w-3 h-3 text-amber-950" /> Aguardando Aceite
+                          </span>
+                        </div>
+
+                        <div>
+                          <p className="text-[11px] text-amber-200/90 font-bold flex items-center gap-1">
+                            <Swords className="w-3.5 h-3.5 text-amber-300" />
+                            <span>Desafio enviado para:</span>
+                          </p>
+                          <h4 className="font-black text-white text-sm sm:text-base mt-0.5">
+                            {opponentName}
+                          </h4>
+                          <p className="text-[10px] text-slate-300 font-medium mt-0.5">
+                            Reservado por você ({user.nome})
+                          </p>
+                        </div>
+
+                        <div className="pt-2 border-t border-slate-700/80 flex items-center justify-between gap-2">
+                          <span className="text-[11px] text-amber-300 font-bold flex items-center gap-1.5">
+                            <Clock className="w-3.5 h-3.5 text-amber-400 animate-pulse shrink-0" />
+                            <span>Pendente (Aguardando o adversário)</span>
+                          </span>
+
+                          <button
+                            type="button"
+                            onClick={() => handleOpenCancelModal(existingBooking, quadraNum, slot.label)}
+                            className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold border border-white/30 transition-all active:scale-95 cursor-pointer shrink-0"
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  // 2. DESAFIO RECEBIDO DE OUTRO JOGADOR (AGUARDANDO SEU ACEITE)
+                  if (existingBooking && isChallenged && isPendingChallenge && match) {
+                    return (
+                      <div
+                        key={quadraNum}
+                        className="p-4 rounded-2xl bg-indigo-950 text-white shadow-md border-2 border-purple-400 flex flex-col justify-between space-y-3"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="px-2.5 py-0.5 rounded-lg bg-white/20 text-white font-black text-[11px] uppercase tracking-wider">
+                            Quadra {quadraNum}
+                          </span>
+                          <span className="px-2.5 py-0.5 rounded-lg bg-purple-500 text-white font-black text-[10px] uppercase shadow-xs flex items-center gap-1">
+                            <Swords className="w-3 h-3 text-white" /> Desafio Recebido
+                          </span>
+                        </div>
+
+                        <div>
+                          <p className="text-[11px] text-purple-200 font-bold">
+                            Desafio de:
+                          </p>
+                          <h4 className="font-black text-white text-sm sm:text-base mt-0.5">
+                            {challengerName}
+                          </h4>
+                          <p className="text-[10px] text-purple-300 font-medium mt-0.5">
+                            Para jogar contra você
+                          </p>
+                        </div>
+
+                        <div className="pt-2 border-t border-purple-800/80 flex items-center justify-between gap-2">
+                          <span className="text-[11px] text-amber-300 font-bold flex items-center gap-1">
+                            <Clock className="w-3.5 h-3.5 text-amber-400 animate-pulse shrink-0" />
+                            <span>Aguardando seu aceite</span>
+                          </span>
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleAcceptChallenge(match.id)}
+                              className="px-2.5 py-1 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-black shadow-xs transition-all active:scale-95 cursor-pointer"
+                            >
+                              Aceitar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRejectChallenge(match.id)}
+                              className="px-2 py-1 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold border border-white/20 transition-all active:scale-95 cursor-pointer"
+                            >
+                              Recusar
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  // 3. PARTIDA CONFIRMADA / MEU HORÁRIO (AZUL)
+                  if (existingBooking && (isChallenger || isChallenged)) {
+                    const opponentInMatch = isChallenger ? opponentName : challengerName;
+
                     return (
                       <div
                         key={quadraNum}
@@ -738,20 +903,31 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
                             Quadra {quadraNum}
                           </span>
                           <span className="px-2.5 py-0.5 rounded-lg bg-blue-900 text-blue-100 font-black text-[10px] uppercase border border-blue-400/40">
-                            Meu Horário
+                            {hasMatch ? 'Partida Confirmada' : 'Meu Horário'}
                           </span>
                         </div>
 
                         <div>
-                          <p className="text-xs text-blue-100 font-medium">Reservado por você:</p>
-                          <h4 className="font-black text-white text-sm sm:text-base mt-0.5">
-                            {user.nome}
-                          </h4>
+                          {hasMatch ? (
+                            <>
+                              <p className="text-xs text-blue-100 font-medium">Partida com:</p>
+                              <h4 className="font-black text-white text-sm sm:text-base mt-0.5">
+                                {user.nome} <span className="text-blue-200 font-normal">vs</span> {opponentInMatch}
+                              </h4>
+                            </>
+                          ) : (
+                            <>
+                              <p className="text-xs text-blue-100 font-medium">Reservado por você:</p>
+                              <h4 className="font-black text-white text-sm sm:text-base mt-0.5">
+                                {user.nome}
+                              </h4>
+                            </>
+                          )}
                         </div>
 
                         <div className="pt-2 border-t border-blue-400/40 flex items-center justify-between">
                           <span className="text-[11px] text-blue-100 font-medium flex items-center gap-1">
-                            <CheckCircle2 className="w-3.5 h-3.5 text-blue-200" /> Confirmado
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-300" /> Confirmado
                           </span>
 
                           <button
@@ -765,8 +941,55 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
                     );
                   }
 
-                  // 2. RESERVADO POR OUTRO JOGADOR (VERMELHO)
-                  if (existingBooking && !isMyBooking) {
+                  // 4. RESERVADO POR OUTRO JOGADOR OU DESAFIO PENDENTE DE TERCEIROS (VERMELHO / ÂMBAR)
+                  if (existingBooking && !isChallenger && !isChallenged) {
+                    if (isPendingChallenge) {
+                      return (
+                        <div
+                          key={quadraNum}
+                          className="p-4 rounded-2xl bg-amber-50 border-2 border-amber-300 text-slate-900 shadow-xs flex flex-col justify-between space-y-3"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="px-2.5 py-0.5 rounded-lg bg-amber-200 text-amber-950 font-black text-[11px] uppercase tracking-wider">
+                              Quadra {quadraNum}
+                            </span>
+                            <span className="px-2.5 py-0.5 rounded-lg bg-amber-500 text-white font-black text-[10px] uppercase shadow-2xs">
+                              Desafio Pendente
+                            </span>
+                          </div>
+
+                          <div>
+                            {isAdmin ? (
+                              <>
+                                <p className="text-[10px] text-amber-800 font-bold uppercase">Desafio entre:</p>
+                                <h4 className="font-bold text-slate-900 text-xs mt-0.5">{challengerName} vs {opponentName}</h4>
+                              </>
+                            ) : (
+                              <>
+                                <p className="text-xs text-amber-800 font-bold">Status do Horário:</p>
+                                <h4 className="font-black text-amber-900 text-sm mt-0.5">Aguardando Aceite</h4>
+                              </>
+                            )}
+                          </div>
+
+                          <div className="pt-2 border-t border-amber-200 flex items-center justify-between">
+                            <span className="text-[11px] text-amber-700 font-bold flex items-center gap-1">
+                              <Clock className="w-3.5 h-3.5 text-amber-600" /> Reservado (Pendente)
+                            </span>
+
+                            {isAdmin && (
+                              <button
+                                onClick={() => handleOpenCancelModal(existingBooking, quadraNum, slot.label)}
+                                className="px-2.5 py-1 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold cursor-pointer"
+                              >
+                                Cancelar Admin
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    }
+
                     return (
                       <div
                         key={quadraNum}

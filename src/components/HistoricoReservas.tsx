@@ -190,7 +190,12 @@ export const HistoricoReservas: React.FC<HistoricoReservasProps> = ({ session, o
 
                   <div className="flex items-center gap-3 self-end sm:self-center">
                     {/* Status badge */}
-                    {isTodayOrFuture ? (
+                    {booking.partida?.status === 'PENDENTE' ? (
+                      <span className="px-3 py-1 rounded-xl text-xs font-bold bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1">
+                        <Clock className="w-3.5 h-3.5 text-amber-700" />
+                        <span>Pendente</span>
+                      </span>
+                    ) : isTodayOrFuture ? (
                       <span className="px-3 py-1 rounded-xl text-xs font-bold bg-blue-100 text-blue-900 border border-blue-200">
                         Confirmado
                       </span>

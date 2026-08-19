@@ -287,12 +287,23 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
                   <span className="text-xs sm:text-sm font-black text-slate-900">
                     Quadra {nextUserBooking.quadra_numero}
                   </span>
-                  <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-extrabold uppercase">
-                    Confirmada
-                  </span>
+                  {nextUserBooking.partida?.status === 'PENDENTE' ? (
+                    <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[10px] font-extrabold uppercase flex items-center gap-1">
+                      <Clock className="w-3 h-3 text-amber-600" /> Pendente
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-extrabold uppercase">
+                      Confirmada
+                    </span>
+                  )}
                 </div>
                 <p className="text-xs text-slate-600 font-medium mt-0.5">
                   📅 {formatBookingDate(nextUserBooking.data)} • ⏰ {nextUserBooking.horario_label}
+                  {nextUserBooking.adversario_nome && (
+                    <span className="text-slate-500 font-semibold ml-1">
+                      (vs {nextUserBooking.adversario_nome})
+                    </span>
+                  )}
                 </p>
               </div>
             </div>
