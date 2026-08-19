@@ -155,7 +155,7 @@ export const RankingView: React.FC<RankingViewProps> = ({ session, onRefreshSess
               return (
                 <div
                   key={item.usuario.id}
-                  className={`p-3 sm:p-4 rounded-2xl flex flex-col items-center text-center space-y-1.5 ${
+                  className={`p-3 sm:p-4 rounded-2xl flex flex-col items-center text-center justify-between space-y-2 ${
                     isFirst
                       ? 'bg-gradient-to-b from-amber-500/20 to-slate-800/80 border border-amber-400/40'
                       : 'bg-slate-800/50 border border-slate-700/50'
@@ -180,12 +180,14 @@ export const RankingView: React.FC<RankingViewProps> = ({ session, onRefreshSess
                       {getPositionBadge(item.posicao)}
                     </div>
                   </div>
-                  <p className="text-xs sm:text-sm font-black text-white line-clamp-1">
-                    {item.usuario.nome}
-                  </p>
-                  <span className="text-[10px] font-bold text-slate-400">
-                    {item.vitorias}V ({item.aproveitamento}%)
-                  </span>
+                  <div className="space-y-0.5 w-full">
+                    <p className="text-xs sm:text-sm font-black text-white leading-tight break-words text-center px-1">
+                      {item.usuario.nome}
+                    </p>
+                    <span className="text-[10px] font-bold text-slate-400 block">
+                      {item.vitorias}V ({item.aproveitamento}%)
+                    </span>
+                  </div>
                 </div>
               );
             })}
@@ -265,19 +267,20 @@ export const RankingView: React.FC<RankingViewProps> = ({ session, onRefreshSess
               return (
                 <div
                   key={item.usuario.id}
-                  className={`p-4 sm:p-5 flex items-center justify-between gap-3 transition-colors ${
-                    isCurrentUser ? 'bg-amber-50/40 hover:bg-amber-50/70' : 'hover:bg-slate-50/80'
+                  className={`p-3.5 sm:p-5 flex items-center justify-between gap-2.5 sm:gap-4 transition-colors ${
+                    isCurrentUser ? 'bg-amber-50/50 hover:bg-amber-50/80 border-l-4 border-amber-400' : 'hover:bg-slate-50/80'
                   }`}
                 >
-                  <div className="flex items-center gap-3 min-w-0">
+                  {/* ESQUERDA: Posição + Foto + Dados do Jogador (Nome, Classe, Stats) */}
+                  <div className="flex items-center sm:items-start gap-2.5 sm:gap-3.5 min-w-0 flex-1">
                     
                     {/* POSIÇÃO */}
-                    <div className="shrink-0">
+                    <div className="shrink-0 pt-0.5">
                       {getPositionBadge(item.posicao)}
                     </div>
 
                     {/* FOTO */}
-                    <div className="w-11 h-11 rounded-2xl bg-slate-900 text-white flex items-center justify-center font-black text-sm shrink-0 overflow-hidden shadow-xs">
+                    <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-slate-900 text-white flex items-center justify-center font-black text-sm shrink-0 overflow-hidden shadow-xs">
                       {item.usuario.foto_url ? (
                         <img
                           src={item.usuario.foto_url}
@@ -292,34 +295,49 @@ export const RankingView: React.FC<RankingViewProps> = ({ session, onRefreshSess
                       )}
                     </div>
 
-                    {/* NOME & CLASSE */}
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-xs sm:text-sm font-black text-slate-900 truncate">
+                    {/* BLOCO DE TEXTO: NOME COMPLETO, CLASSE E ESTATÍSTICAS */}
+                    <div className="min-w-0 flex-1 space-y-1">
+                      
+                      {/* LINHA 1: NOME COMPLETO + SELO VOCÊ */}
+                      <div className="flex items-center flex-wrap gap-1.5 leading-snug">
+                        <h3 className="text-xs sm:text-sm font-black text-slate-900 leading-snug break-words">
                           {item.usuario.nome}
                         </h3>
                         {isCurrentUser && (
-                          <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-slate-900 text-[#ccff00]">
+                          <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md bg-slate-900 text-[#ccff00] shrink-0">
                             Você
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">
+
+                      {/* LINHA 2: CLASSE */}
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] font-black px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-200 shrink-0">
                           {item.classe}
                         </span>
-                        <span className="text-[11px] font-bold text-slate-500">
-                          {item.partidas} {item.partidas === 1 ? 'partida' : 'partidas'} · {item.vitorias}V / {item.derrotas}D
+                      </div>
+
+                      {/* LINHA 3: ESTATÍSTICAS COMPLETAS (No celular inclui aproveitamento) */}
+                      <div className="text-[11px] font-medium text-slate-500 leading-tight flex flex-wrap items-center gap-x-1.5 gap-y-0.5 pt-0.5">
+                        <span>{item.partidas} {item.partidas === 1 ? 'partida' : 'partidas'}</span>
+                        <span className="text-slate-300">·</span>
+                        <span className="font-semibold text-slate-700">{item.vitorias}V / {item.derrotas}D</span>
+                        
+                        {/* Aproveitamento visível inline no celular */}
+                        <span className="inline-flex sm:hidden items-center gap-1">
+                          <span className="text-slate-300">·</span>
+                          <span className="font-black text-slate-900">{item.aproveitamento}% aprov.</span>
                         </span>
                       </div>
+
                     </div>
                   </div>
 
-                  {/* STATS & AÇÃO */}
-                  <div className="flex items-center gap-3 sm:gap-5 shrink-0">
+                  {/* DIREITA: STATS EM COLUNA (Desktop) & BOTÃO DESAFIAR */}
+                  <div className="flex items-center gap-3 sm:gap-5 shrink-0 self-center">
                     
-                    {/* APROVEITAMENTO */}
-                    <div className="text-right">
+                    {/* APROVEITAMENTO (Desktop) */}
+                    <div className="text-right hidden sm:block">
                       <span className="text-[10px] font-bold uppercase text-slate-400 block">
                         Aproveitamento
                       </span>
@@ -328,7 +346,7 @@ export const RankingView: React.FC<RankingViewProps> = ({ session, onRefreshSess
                       </span>
                     </div>
 
-                    {/* PONTOS */}
+                    {/* PONTOS (Desktop) */}
                     <div className="text-right hidden sm:block">
                       <span className="text-[10px] font-bold uppercase text-slate-400 block">
                         Pontos
@@ -343,9 +361,10 @@ export const RankingView: React.FC<RankingViewProps> = ({ session, onRefreshSess
                       <button
                         type="button"
                         onClick={() => handleChallengePlayer(item.usuario.id)}
-                        className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-[#0F172A] hover:text-[#ccff00] text-slate-800 text-xs font-black transition-all flex items-center gap-1 cursor-pointer shadow-2xs"
+                        className="p-2 sm:px-3.5 sm:py-2 rounded-xl bg-slate-100 hover:bg-[#0F172A] hover:text-[#ccff00] text-slate-800 text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs shrink-0"
+                        title={`Desafiar ${item.usuario.nome}`}
                       >
-                        <Swords className="w-3.5 h-3.5" />
+                        <Swords className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
                         <span className="hidden sm:inline">Desafiar</span>
                       </button>
                     )}
