@@ -14,6 +14,7 @@ export default defineConfig(() => {
         injectRegister: 'auto',
         includeAssets: [
           'favicon.ico',
+          'icons/tennisplay-apple-touch-v2.png',
           'icons/apple-touch-icon.png',
           'icons/favicon-16x16.png',
           'icons/favicon-32x32.png',
