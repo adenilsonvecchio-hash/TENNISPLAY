@@ -7,6 +7,9 @@ import { getSupabaseClient } from './supabase';
 import { normalizeLocation } from './location';
 import { getDayOfWeek, getTodayCivilDate, formatCivilDate, isPastCivilDate, isPastTimeSlot } from './dateUtils';
 import { PLAYER_AVATARS_BUCKET, validateAvatarFile, convertImageToWebp } from './avatarImage';
+import { LocalCache } from './cache';
+import { clearAllMemoryCache } from './swr';
+import { perf } from './perf';
 
 export { PLAYER_AVATARS_BUCKET };
 
@@ -120,16 +123,20 @@ const generateCode = (name: string) => `${name.replace(/[^a-z0-9]/gi, '').slice(
 const timeText = (value: string) => value.slice(0, 5);
 
 async function loadSession(userId: string): Promise<AuthSession> {
+  perf.start('profile_load');
   const db = requireDb();
   const [{ data: userRow, error: userError }, { data: memberRows, error: memberError }] = await Promise.all([
-    db.from('usuarios').select('*').eq('id', userId).single(),
+    db.from('usuarios').select('id, nome, email, whatsapp, avatar_url, criado_em').eq('id', userId).single(),
     db.from('membros_grupo').select('*, grupo:grupos(*)').eq('usuario_id', userId)
   ]);
   if (userError) fail('Erro ao carregar perfil', userError);
   if (memberError) fail('Erro ao carregar grupos', memberError);
   const members = (memberRows || []).map(mapMember);
   const active = members.find((m) => m.status === 'ATIVO') || members.find((m) => m.status === 'PENDENTE') || members[0];
-  return { user: mapUser(userRow), membros: members, activeGroup: active?.grupo || null, activeRole: active?.perfil || null };
+  const session: AuthSession = { user: mapUser(userRow), membros: members, activeGroup: active?.grupo || null, activeRole: active?.perfil || null };
+  LocalCache.setCachedSession(session);
+  perf.end('profile_load');
+  return session;
 }
 
 async function createDefaults(groupId: string) {
@@ -505,25 +512,62 @@ async function enrichReservationsWithMatches(
 
 export const DbService = {
   loadSession(userId: string): Promise<AuthSession> { return loadSession(userId); },
-  saveCurrentSession(_session: AuthSession | null): void {},
-  getCurrentSession(): AuthSession | null { return null; },
+  saveCurrentSession(session: AuthSession | null): void {
+    LocalCache.setCachedSession(session);
+  },
+  getCurrentSession(): AuthSession | null {
+    return LocalCache.getCachedSession();
+  },
+
+  async logout(userId?: string): Promise<void> {
+    LocalCache.clearUserPrivateData(userId);
+    clearAllMemoryCache(userId);
+    const db = getSupabaseClient();
+    if (db) {
+      try {
+        await db.removeAllChannels();
+        await db.auth.signOut();
+      } catch (err) {
+        console.warn('[DbService.logout] Erro ao deslogar do Supabase:', err);
+      }
+    }
+  },
 
   async restoreSession(): Promise<AuthSession | null> {
+    perf.start('session_restore');
     const db = getSupabaseClient();
-    if (!db) return null;
-
-    const { data, error } = await db.auth.getSession();
-    if (error) {
-      console.error('[Supabase getSession Error]:', error.code, error.message, error);
-      fail('Erro ao recuperar sessão', error);
+    if (!db) {
+      perf.end('session_restore');
+      return null;
     }
 
-    if (!data.session?.user) return null;
+    try {
+      const { data, error } = await db.auth.getSession();
+      if (error) {
+        console.error('[Supabase getSession Error]:', error.code, error.message, error);
+        LocalCache.setCachedSession(null);
+        perf.end('session_restore');
+        return null;
+      }
 
-    // Aguarda e executa eventual cadastro pendente em user_metadata assim que houver sessão válida
-    await completePendingOnboarding(data.session.user);
+      if (!data.session?.user) {
+        LocalCache.setCachedSession(null);
+        perf.end('session_restore');
+        return null;
+      }
 
-    return loadSession(data.session.user.id);
+      // Aguarda e executa eventual cadastro pendente em user_metadata assim que houver sessão válida
+      await completePendingOnboarding(data.session.user);
+
+      const session = await loadSession(data.session.user.id);
+      LocalCache.setCachedSession(session);
+      perf.end('session_restore');
+      return session;
+    } catch (err) {
+      console.warn('[DbService.restoreSession] Falha ao restaurar sessão silenciosamente:', err);
+      perf.end('session_restore');
+      return null;
+    }
   },
 
   async registerProprietario(data: CadastroProprietarioData): Promise<{
@@ -1516,12 +1560,6 @@ export const DbService = {
       fail('Erro ao carregar reservas', error);
     }
     return enrichReservationsWithMatches(data || [], currentUserId, groupId);
-  },
-
-  async logout(): Promise<void> {
-    const db = requireDb();
-    const { error } = await db.auth.signOut();
-    if (error) fail('Erro ao sair', error);
   },
 
   // ==========================================

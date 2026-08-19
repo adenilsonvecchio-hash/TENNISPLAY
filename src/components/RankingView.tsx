@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { AuthSession, RankingJogador, PlayerClass, DEFAULT_PLAYER_CLASSES } from '../types';
 import { DbService } from '../lib/db';
 import { toast } from '../lib/toast';
+import { useSwrData, TTL_MAP, invalidateCache } from '../lib/swr';
 import {
   Trophy,
   Medal,
@@ -12,7 +13,8 @@ import {
   TrendingUp,
   RefreshCw,
   Users,
-  Award
+  Award,
+  ChevronDown
 } from 'lucide-react';
 import { JogarFlowModal } from './JogarFlowModal';
 
@@ -24,37 +26,33 @@ interface RankingViewProps {
 export const RankingView: React.FC<RankingViewProps> = ({ session, onRefreshSession }) => {
   const { user, activeGroup } = session;
 
-  const [rankingList, setRankingList] = useState<RankingJogador[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedClassFilter, setSelectedClassFilter] = useState<string>('TODAS');
   const [searchQuery, setSearchQuery] = useState('');
+  const [visibleCount, setVisibleCount] = useState<number>(20);
 
   // Jogar flow modal triggered by "Desafiar"
   const [showJogarModal, setShowJogarModal] = useState(false);
   const [opponentToChallenge, setOpponentToChallenge] = useState<string | undefined>(undefined);
 
-  const loadRanking = async () => {
-    if (!activeGroup) return;
-    try {
-      const data = await DbService.getGroupRanking(activeGroup.id);
-      setRankingList(data);
-    } catch (err: any) {
-      console.error('Erro ao carregar ranking:', err);
-      toast.error('Não foi possível carregar o ranking.');
-    } finally {
-      setLoading(false);
-      setIsRefreshing(false);
+  // SWR: Ranking com TTL de 2 minutos e carregamento imediato do cache
+  const {
+    data: rankingList = [],
+    isLoading,
+    isRevalidating,
+    revalidate
+  } = useSwrData<RankingJogador[]>({
+    type: 'group_ranking',
+    groupId: activeGroup?.id,
+    ttl: TTL_MAP.RANKING,
+    enabled: !!activeGroup,
+    fetcher: () => (activeGroup ? DbService.getGroupRanking(activeGroup.id) : Promise.resolve([]))
+  });
+
+  const handleRefresh = async () => {
+    if (activeGroup) {
+      invalidateCache('group_ranking', undefined, activeGroup.id);
+      await revalidate();
     }
-  };
-
-  useEffect(() => {
-    loadRanking();
-  }, [activeGroup?.id]);
-
-  const handleRefresh = () => {
-    setIsRefreshing(true);
-    loadRanking();
   };
 
   const handleChallengePlayer = (opponentId: string) => {
@@ -77,6 +75,7 @@ export const RankingView: React.FC<RankingViewProps> = ({ session, onRefreshSess
   });
 
   const top3 = rankingList.slice(0, 3);
+  const displayedRanking = filteredRanking.slice(0, visibleCount);
 
   const getPositionBadge = (pos: number) => {
     if (pos === 1) {
@@ -128,10 +127,10 @@ export const RankingView: React.FC<RankingViewProps> = ({ session, onRefreshSess
             <button
               type="button"
               onClick={handleRefresh}
-              disabled={isRefreshing}
+              disabled={isRevalidating}
               className="px-4 py-2.5 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-3.5 h-3.5 ${isRevalidating ? 'animate-spin' : ''}`} />
               <span>Atualizar</span>
             </button>
             <button
@@ -247,10 +246,11 @@ export const RankingView: React.FC<RankingViewProps> = ({ session, onRefreshSess
 
       {/* RANKING LIST */}
       <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-2xs">
-        {loading ? (
-          <div className="py-16 text-center text-slate-400 space-y-3">
-            <RefreshCw className="w-6 h-6 animate-spin mx-auto text-slate-500" />
-            <p className="text-xs font-bold">Carregando classificação do grupo...</p>
+        {isLoading && rankingList.length === 0 ? (
+          <div className="p-6 space-y-3 animate-pulse">
+            {[1, 2, 3, 4, 5].map((i) => (
+              <div key={i} className="h-16 bg-slate-100 rounded-2xl" />
+            ))}
           </div>
         ) : filteredRanking.length === 0 ? (
           <div className="py-16 text-center text-slate-400 space-y-2">
@@ -259,7 +259,7 @@ export const RankingView: React.FC<RankingViewProps> = ({ session, onRefreshSess
           </div>
         ) : (
           <div className="divide-y divide-slate-100">
-            {filteredRanking.map((item) => {
+            {displayedRanking.map((item) => {
               const isCurrentUser = item.usuario.id === user.id;
 
               return (
@@ -282,6 +282,8 @@ export const RankingView: React.FC<RankingViewProps> = ({ session, onRefreshSess
                         <img
                           src={item.usuario.foto_url}
                           alt={item.usuario.nome}
+                          loading="lazy"
+                          decoding="async"
                           className="w-full h-full object-cover"
                           referrerPolicy="no-referrer"
                         />
@@ -351,6 +353,20 @@ export const RankingView: React.FC<RankingViewProps> = ({ session, onRefreshSess
                 </div>
               );
             })}
+
+            {/* BOTÃO CARREGAR MAIS SE HOUVER MAIS JOGADORES */}
+            {filteredRanking.length > visibleCount && (
+              <div className="p-4 text-center bg-slate-50/50 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setVisibleCount((prev) => prev + 20)}
+                  className="px-5 py-2.5 rounded-xl bg-white hover:bg-slate-100 text-slate-800 text-xs font-black border border-slate-200 shadow-2xs transition-all cursor-pointer inline-flex items-center gap-1.5"
+                >
+                  <ChevronDown className="w-4 h-4" />
+                  <span>Ver mais {Math.min(20, filteredRanking.length - visibleCount)} jogadores</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -366,7 +382,7 @@ export const RankingView: React.FC<RankingViewProps> = ({ session, onRefreshSess
           }}
           preSelectedOpponentId={opponentToChallenge}
           onSuccess={() => {
-            loadRanking();
+            handleRefresh();
             if (onRefreshSession) onRefreshSession();
           }}
         />

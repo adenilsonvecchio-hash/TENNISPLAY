@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { AuthSession, Reserva } from '../types';
 import { DbService } from '../lib/db';
 import { toast } from '../lib/toast';
+import { useSwrData, TTL_MAP, invalidateCache } from '../lib/swr';
 import {
   Calendar as CalendarIcon,
   Clock,
@@ -10,7 +11,8 @@ import {
   Filter,
   Search,
   Building2,
-  Trash2
+  Trash2,
+  ChevronDown
 } from 'lucide-react';
 
 interface HistoricoReservasProps {
@@ -23,22 +25,29 @@ export const HistoricoReservas: React.FC<HistoricoReservasProps> = ({ session, o
 
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDate, setFilterDate] = useState('');
-  const [bookings, setBookings] = useState<Reserva[]>([]);
+  const [visibleCount, setVisibleCount] = useState<number>(20);
 
   const isAdmin = activeRole === 'PROPRIETARIO' || activeRole === 'ADMINISTRADOR';
 
-  const refreshList = React.useCallback(async () => {
-    if (!user || !activeGroup) return;
-    const updated = isAdmin
-      ? await DbService.getAllGroupBookings(activeGroup.id)
-      : await DbService.getUserBookingsAll(user.id, activeGroup.id);
-    setBookings(updated);
-    if (onRefreshSession) onRefreshSession();
-  }, [user?.id, activeGroup?.id, isAdmin, onRefreshSession]);
+  const cacheKey = isAdmin ? 'all_group_bookings' : 'user_bookings_all';
 
-  useEffect(() => {
-    refreshList();
-  }, [refreshList]);
+  const {
+    data: bookings = [],
+    isLoading,
+    revalidate
+  } = useSwrData<Reserva[]>({
+    type: cacheKey,
+    userId: user?.id,
+    groupId: activeGroup?.id,
+    ttl: TTL_MAP.BOOKINGS_CHALLENGES,
+    enabled: !!user && !!activeGroup,
+    fetcher: () => {
+      if (!user || !activeGroup) return Promise.resolve([]);
+      return isAdmin
+        ? DbService.getAllGroupBookings(activeGroup.id)
+        : DbService.getUserBookingsAll(user.id, activeGroup.id);
+    }
+  });
 
   if (!user || !activeGroup) return null;
 
@@ -54,12 +63,17 @@ export const HistoricoReservas: React.FC<HistoricoReservasProps> = ({ session, o
     return matchesSearch && matchesDate;
   });
 
+  const displayedBookings = filteredBookings.slice(0, visibleCount);
+
   const handleCancelBooking = async (bookingId: string) => {
     if (!confirm('Deseja realmente cancelar este agendamento?')) return;
     try {
       await DbService.cancelBooking(bookingId, user.id, activeRole || 'JOGADOR');
       toast.success('Reserva cancelada com sucesso.');
-      await refreshList();
+      invalidateCache(cacheKey, user.id, activeGroup.id);
+      invalidateCache('day_bookings', undefined, activeGroup.id);
+      await revalidate();
+      if (onRefreshSession) onRefreshSession();
     } catch (err: any) {
       toast.error(err.message || 'Erro ao cancelar.');
     }
@@ -120,14 +134,20 @@ export const HistoricoReservas: React.FC<HistoricoReservasProps> = ({ session, o
 
       {/* RESERVATIONS TABLE / LIST */}
       <div className="bg-white rounded-3xl border border-slate-200/80 shadow-xs overflow-hidden">
-        {filteredBookings.length === 0 ? (
+        {isLoading && bookings.length === 0 ? (
+          <div className="p-6 space-y-3 animate-pulse">
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="h-16 bg-slate-100 rounded-2xl" />
+            ))}
+          </div>
+        ) : filteredBookings.length === 0 ? (
           <div className="p-12 text-center text-slate-400 space-y-2">
             <p className="font-bold text-sm">Nenhuma reserva encontrada no histórico.</p>
             <p className="text-xs">Tente ajustar os filtros de busca ou selecione outra data.</p>
           </div>
         ) : (
           <div className="divide-y divide-slate-100">
-            {filteredBookings.map((booking) => {
+            {displayedBookings.map((booking) => {
               const isTodayOrFuture = new Date(booking.data + 'T23:59:59').getTime() >= Date.now();
               const isMine = booking.jogador_id === user.id;
 
@@ -140,7 +160,7 @@ export const HistoricoReservas: React.FC<HistoricoReservasProps> = ({ session, o
                     <div
                       className={`w-12 h-12 rounded-2xl flex items-center justify-center font-black text-sm shrink-0 ${
                         isMine
-                          ? 'bg-blue-600 text-white shadow-sm'
+                          ? 'bg-[#0F172A] text-[#ccff00] shadow-sm'
                           : 'bg-slate-100 text-slate-800'
                       }`}
                     >
@@ -184,7 +204,7 @@ export const HistoricoReservas: React.FC<HistoricoReservasProps> = ({ session, o
                     {(isMine || isAdmin) && isTodayOrFuture && (
                       <button
                         onClick={() => handleCancelBooking(booking.id)}
-                        className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold flex items-center gap-1 transition-colors"
+                        className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                         <span>Cancelar</span>
@@ -194,6 +214,20 @@ export const HistoricoReservas: React.FC<HistoricoReservasProps> = ({ session, o
                 </div>
               );
             })}
+
+            {/* BOTÃO CARREGAR MAIS SE HOUVER MAIS DE 20 */}
+            {filteredBookings.length > visibleCount && (
+              <div className="p-4 text-center bg-slate-50/50 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setVisibleCount((prev) => prev + 20)}
+                  className="px-5 py-2.5 rounded-xl bg-white hover:bg-slate-100 text-slate-800 text-xs font-black border border-slate-200 shadow-2xs transition-all cursor-pointer inline-flex items-center gap-1.5"
+                >
+                  <ChevronDown className="w-4 h-4" />
+                  <span>Ver mais {Math.min(20, filteredBookings.length - visibleCount)} reservas</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

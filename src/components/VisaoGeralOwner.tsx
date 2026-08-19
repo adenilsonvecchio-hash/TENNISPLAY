@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { AuthSession, MembroGrupo, Reserva, PlayerClass, Partida } from '../types';
 import { DbService } from '../lib/db';
 import { toast, formatClassUpdateToastMessage } from '../lib/toast';
+import { useSwrData, TTL_MAP, invalidateCache } from '../lib/swr';
 import { DesafiosRecebidosCard } from './DesafiosRecebidosCard';
 import {
   CalendarDays,
@@ -16,7 +17,8 @@ import {
   ArrowRight,
   Shield,
   Trophy,
-  Swords
+  Swords,
+  Loader2
 } from 'lucide-react';
 
 interface VisaoGeralOwnerProps {
@@ -36,6 +38,7 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
     (m) => m.usuario_id === user?.id && m.grupo_id === activeGroup?.id
   );
   const userRole = currentMember?.perfil || session.activeRole || 'JOGADOR';
+
   const isOwnerOrAdmin =
     (userRole === 'PROPRIETARIO' || userRole === 'ADMINISTRADOR') &&
     currentMember?.status === 'ATIVO';
@@ -47,66 +50,60 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
       ? 'Administrador'
       : 'Jogador';
 
-  const [ownerClassState, setOwnerClassState] = useState<PlayerClass>(
-    currentMember?.classe || 'Sem Classe'
-  );
-  const [nextUserBooking, setNextUserBooking] = useState<Reserva | null>(null);
-  const [pendingChallenges, setPendingChallenges] = useState<Partida[]>([]);
   const [copied, setCopied] = useState(false);
-  const [loading, setLoading] = useState(true);
-
   const todayStr = new Date().toISOString().split('T')[0];
 
-  useEffect(() => {
-    console.log('[HOME JOGADOR]', {
-      componente: 'VisaoGeralOwner.tsx',
-      userId: user?.id,
-      groupId: activeGroup?.id,
-      role: currentMember?.perfil || session.activeRole
-    });
-  }, [user?.id, activeGroup?.id, currentMember?.perfil, session.activeRole]);
+  // SWR: Next Booking (30s TTL com cache local segregado por user & grupo)
+  const {
+    data: userBookings,
+    isLoading: loadingBookings,
+    revalidate: revalidateBookings
+  } = useSwrData<Reserva[]>({
+    type: 'user_bookings_all',
+    userId: user?.id,
+    groupId: activeGroup?.id,
+    ttl: TTL_MAP.BOOKINGS_CHALLENGES,
+    enabled: !!user && !!activeGroup,
+    fetcher: () => (user && activeGroup ? DbService.getUserBookingsAll(user.id, activeGroup.id) : Promise.resolve([]))
+  });
 
-  useEffect(() => {
-    if (currentMember?.classe) {
-      setOwnerClassState(currentMember.classe);
-    }
-  }, [currentMember?.classe]);
+  // SWR: Desafios pendentes (30s TTL)
+  const {
+    data: pendingChallenges = [],
+    isLoading: loadingChallenges,
+    revalidate: revalidateChallenges
+  } = useSwrData<Partida[]>({
+    type: 'pending_challenges',
+    userId: user?.id,
+    groupId: activeGroup?.id,
+    ttl: TTL_MAP.BOOKINGS_CHALLENGES,
+    enabled: !!user && !!activeGroup,
+    fetcher: () => (user && activeGroup ? DbService.getPendingChallenges(user.id, activeGroup.id) : Promise.resolve([]))
+  });
 
-  const loadData = async () => {
-    if (!activeGroup || !user) return;
-    try {
-      const [userBookings, challenges] = await Promise.all([
-        DbService.getUserBookingsAll(user.id, activeGroup.id),
-        DbService.getPendingChallenges(user.id, activeGroup.id)
-      ]);
+  const upcomingBookings = (userBookings || [])
+    .filter((b) => b.data >= todayStr && (b.status === 'confirmada' || !b.status))
+    .sort(
+      (a, b) =>
+        a.data.localeCompare(b.data) ||
+        a.horario_label.localeCompare(b.horario_label)
+    );
 
-      const upcoming = userBookings
-        .filter((b) => b.data >= todayStr && (b.status === 'confirmada' || !b.status))
-        .sort(
-          (a, b) =>
-            a.data.localeCompare(b.data) ||
-            a.horario_label.localeCompare(b.horario_label)
-        );
+  const nextUserBooking = upcomingBookings.length > 0 ? upcomingBookings[0] : null;
 
-      setNextUserBooking(upcoming.length > 0 ? upcoming[0] : null);
-      setPendingChallenges(challenges);
-    } catch (err) {
-      console.error('Erro ao carregar dados da visão geral:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadData();
-  }, [activeGroup?.id, user?.id, todayStr]);
+  const reloadAll = useCallback(() => {
+    revalidateBookings();
+    revalidateChallenges();
+  }, [revalidateBookings, revalidateChallenges]);
 
   const handleAcceptChallenge = async (matchId: string) => {
-    if (!user) return;
+    if (!user || !activeGroup) return;
     try {
       await DbService.acceptChallenge(matchId, user.id);
       toast.success('Desafio aceito com sucesso! O jogo está confirmado na sua agenda. 🎾');
-      await loadData();
+      invalidateCache('user_bookings_all', user.id, activeGroup.id);
+      invalidateCache('pending_challenges', user.id, activeGroup.id);
+      reloadAll();
       if (onRefreshSession) onRefreshSession();
     } catch (err: any) {
       console.error('Erro ao aceitar desafio:', err);
@@ -115,11 +112,13 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
   };
 
   const handleRejectChallenge = async (matchId: string, motivo?: string) => {
-    if (!user) return;
+    if (!user || !activeGroup) return;
     try {
       await DbService.rejectChallenge(matchId, user.id, motivo);
       toast.success('Desafio recusado. A quadra e horário foram liberados.');
-      await loadData();
+      invalidateCache('user_bookings_all', user.id, activeGroup.id);
+      invalidateCache('pending_challenges', user.id, activeGroup.id);
+      reloadAll();
       if (onRefreshSession) onRefreshSession();
     } catch (err: any) {
       console.error('Erro ao recusar desafio:', err);
@@ -230,7 +229,7 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
           groupId={activeGroup.id}
           onAccept={handleAcceptChallenge}
           onReject={handleRejectChallenge}
-          onChallengeUpdated={loadData}
+          onChallengeUpdated={reloadAll}
         />
       )}
 
@@ -266,7 +265,18 @@ export const VisaoGeralOwner: React.FC<VisaoGeralOwnerProps> = ({
           )}
         </div>
 
-        {nextUserBooking ? (
+        {loadingBookings && !userBookings ? (
+          <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 animate-pulse flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-11 h-11 rounded-xl bg-slate-200 shrink-0" />
+              <div className="space-y-2 min-w-0">
+                <div className="h-4 w-28 bg-slate-200 rounded" />
+                <div className="h-3 w-40 bg-slate-200 rounded" />
+              </div>
+            </div>
+            <div className="h-8 w-24 bg-slate-200 rounded-xl shrink-0" />
+          </div>
+        ) : nextUserBooking ? (
           <div className="bg-slate-50 rounded-2xl p-3.5 sm:p-4 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <div className="w-11 h-11 rounded-xl bg-[#0F172A] text-[#ccff00] font-black text-xs sm:text-sm flex items-center justify-center shrink-0">

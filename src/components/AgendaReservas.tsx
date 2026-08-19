@@ -9,6 +9,7 @@ import {
 } from '../types';
 import { DbService } from '../lib/db';
 import { toast } from '../lib/toast';
+import { LocalCache } from '../lib/cache';
 import { getSupabaseClient } from '../lib/supabase';
 import {
   getTodayCivilDate,
@@ -93,17 +94,45 @@ export const AgendaReservas: React.FC<AgendaReservasProps> = ({ session }) => {
 
   const refreshData = async () => {
     if (!activeGroup) return;
-    const config = await DbService.getGroupCourtConfig(activeGroup.id, selectedDate);
+
+    // Tentativa otimista síncrona do cache local
+    const cachedConfig = LocalCache.get<CourtConfig>(`court_config_${selectedDate}`, undefined, activeGroup.id);
+    if (cachedConfig?.data) {
+      setCourtConfig(cachedConfig.data);
+      setNumQuadrasInput(cachedConfig.data.qtd_quadras);
+      setPrazoCancelamentoInput(cachedConfig.data.prazo_cancelamento_horas);
+      setCustomHorarios(cachedConfig.data.horarios);
+    }
+
+    const cachedDayBookings = LocalCache.get<Reserva[]>(`day_bookings_${selectedDate}`, undefined, activeGroup.id);
+    if (cachedDayBookings?.data) {
+      setBookings(cachedDayBookings.data);
+    }
+
+    const cachedMembersCount = LocalCache.get<number>('members_count', undefined, activeGroup.id);
+    if (typeof cachedMembersCount?.data === 'number') {
+      setGroupMembersCount(cachedMembersCount.data);
+    }
+
+    // Revalidação em segundo plano
+    const [config, dayBookings, members] = await Promise.all([
+      DbService.getGroupCourtConfig(activeGroup.id, selectedDate),
+      DbService.getBookingsForDate(activeGroup.id, selectedDate),
+      DbService.getGroupMembers(activeGroup.id)
+    ]);
+
     setCourtConfig(config);
     setNumQuadrasInput(config.qtd_quadras);
     setPrazoCancelamentoInput(config.prazo_cancelamento_horas);
     setCustomHorarios(config.horarios);
-
-    const dayBookings = await DbService.getBookingsForDate(activeGroup.id, selectedDate);
     setBookings(dayBookings);
 
-    const members = await DbService.getGroupMembers(activeGroup.id);
-    setGroupMembersCount(members.filter(m => m.status === 'ATIVO').length);
+    const activeCount = members.filter(m => m.status === 'ATIVO').length;
+    setGroupMembersCount(activeCount);
+
+    LocalCache.set(`court_config_${selectedDate}`, config, undefined, activeGroup.id);
+    LocalCache.set(`day_bookings_${selectedDate}`, dayBookings, undefined, activeGroup.id);
+    LocalCache.set('members_count', activeCount, undefined, activeGroup.id);
   };
 
   // Load bookings and court config when activeGroup or selectedDate changes

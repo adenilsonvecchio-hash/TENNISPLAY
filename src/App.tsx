@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { AuthSession } from './types';
 import { DbService } from './lib/db';
+import { LocalCache } from './lib/cache';
+import { clearAllMemoryCache } from './lib/swr';
 import { getSupabaseClient } from './lib/supabase';
 import { AppLogo } from './components/AppLogo';
 import { HomeLanding } from './components/HomeLanding';
@@ -12,17 +14,27 @@ import { UserManualModal } from './components/UserManualModal';
 import { ToastContainer } from './components/ToastContainer';
 
 export default function App() {
-  const [session, setSession] = useState<AuthSession | null>(null);
+  // Padrão LetsPlay: inicialização instantânea a partir do cache local (< 500ms)
+  const [session, setSession] = useState<AuthSession | null>(() => LocalCache.getCachedSession());
   const [activeTab, setActiveTab] = useState<string>('overview');
   const [viewMode, setViewMode] = useState<'MANAGER' | 'PLAYER'>('MANAGER');
   const [authModalMode, setAuthModalMode] = useState<'OWNER_REGISTER' | 'ADMIN_LOGIN' | 'PLAYER_REGISTER' | 'LOGIN' | null>(null);
   const [showSupabaseModal, setShowSupabaseModal] = useState<boolean>(false);
   const [showManualModal, setShowManualModal] = useState<boolean>(false);
 
-  // Restore session from Supabase Auth on load and listen to auth state changes
+  // Restauração silenciosa em segundo plano sem travar a interface
   useEffect(() => {
     DbService.restoreSession().then((s) => {
-      if (s) setSession(s);
+      if (s) {
+        setSession(s);
+      } else {
+        // Se a sessão expirou no Supabase, limpa o cache e volta para a Home Landing
+        LocalCache.clearUserPrivateData();
+        clearAllMemoryCache();
+        const sb = getSupabaseClient();
+        if (sb) sb.removeAllChannels();
+        setSession(null);
+      }
     });
 
     const supabase = getSupabaseClient();
@@ -33,6 +45,9 @@ export default function App() {
             if (s) setSession(s);
           });
         } else if (event === 'SIGNED_OUT') {
+          LocalCache.clearUserPrivateData();
+          clearAllMemoryCache();
+          supabase.removeAllChannels();
           setSession(null);
         }
       });
@@ -44,15 +59,20 @@ export default function App() {
   }, []);
 
   const handleAuthSuccess = (newSession: AuthSession) => {
+    LocalCache.setCachedSession(newSession);
     setSession(newSession);
     setAuthModalMode(null);
     setActiveTab('overview');
   };
 
   const handleUpdateSession = (newSession: AuthSession | null) => {
-    setSession(newSession);
     if (!newSession) {
+      LocalCache.clearUserPrivateData();
+      setSession(null);
       setActiveTab('overview');
+    } else {
+      LocalCache.setCachedSession(newSession);
+      setSession(newSession);
     }
   };
 
